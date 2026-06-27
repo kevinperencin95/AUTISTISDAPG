@@ -2,8 +2,8 @@
   "name": "C.A.M. Srl — Registro Mezzi",
   "short_name": "CAM Mezzi",
   "description": "Registro utilizzo mezzi, turni e rifornimenti C.A.M. Srl",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "/AUTISTISDAPG/",
+  "scope": "/AUTISTISDAPG/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0d1b4b",
@@ -23,21 +23,34 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["business", "productivity"],
+  "categories": [
+    "business",
+    "productivity"
+  ],
   "shortcuts": [
     {
       "name": "Inizio Turno",
       "short_name": "Inizio",
       "description": "Registra KM inizio turno",
-      "url": "/?action=viaggio",
-      "icons": [{ "src": "icon.png", "sizes": "192x192" }]
+      "url": "/AUTISTISDAPG/",
+      "icons": [
+        {
+          "src": "icon.png",
+          "sizes": "192x192"
+        }
+      ]
     },
     {
       "name": "Rifornimento",
       "short_name": "Carburante",
       "description": "Registra rifornimento carburante",
-      "url": "/?action=carburante",
-      "icons": [{ "src": "icon.png", "sizes": "192x192" }]
+      "url": "/AUTISTISDAPG/",
+      "icons": [
+        {
+          "src": "icon.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ]
 }

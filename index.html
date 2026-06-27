@@ -9,13 +9,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CAM Mezzi">
 <title>CAM — Registro Mezzi</title>
-
-<!-- PWA Manifest e icone -->
-<link rel="manifest" href="/manifest.json">
-<link rel="apple-touch-icon" href="/icon.png">
-<link rel="icon" type="image/png" href="/icon.png">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" type="image/png" href="icon.png">
 <meta name="msapplication-TileColor" content="#0d1b4b">
-<meta name="msapplication-TileImage" content="/icon.png">
+<meta name="msapplication-TileImage" content="icon.png">
 <style>
 /* ═══════════════════════════════════════════════════
    TOKEN SYSTEM
@@ -668,7 +666,10 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
           </ul>
         </div>
       </div>
-      <button class="btn ghost" onclick="caricaMieiDati()">🔄 Aggiorna</button>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+        <button class="btn ghost" style="flex:1" onclick="caricaMieiDati()">🔄 Aggiorna dati</button>
+        <span id="miei-last-update" style="font-size:11px;color:var(--testo-l)"></span>
+      </div>
     </div>
 
     <!-- ─── TESSERA ───────────────────────────────────────── -->
@@ -1089,7 +1090,8 @@ async function caricaMieiDati() {
           <span class="record-icon">${aperto ? '🟡' : '🗺️'}</span>
           <div class="record-body">
             <strong>${r.targa} — ${r.data} ${aperto ? '<span style="color:#b75e00;font-size:11px;font-weight:700">⚠️ TURNO APERTO</span>' : ''}</strong>
-            <span>${aperto ? `KM Inizio: ${r.kmInizio} — in attesa KM fine` : `${r.kmPercorsi} km (${r.kmInizio}→${r.kmFine})`}${r.modificato ? ' ✏️' : ''}</span>
+            <span>${aperto ? `KM Inizio: ${r.kmInizio} — in attesa KM fine` : `${Number(r.kmPercorsi||0).toLocaleString('it-IT')} km (${r.kmInizio}→${r.kmFine})`}</span>
+            ${r.modificato ? `<span style="font-size:10px;color:var(--blu-l);font-weight:600">✏️ Modificato</span>` : ''}
           </div>
           <div class="record-mod">
             <button class="btn-edit" onclick='apriModifica(${JSON.stringify(r)}, "viaggio")'>✏️</button>
@@ -1106,13 +1108,16 @@ async function caricaMieiDati() {
           <span class="record-icon">⛽</span>
           <div class="record-body">
             <strong>${r.targa} — ${r.data}</strong>
-            <span>${r.litri}lt × €${r.importo}${r.note ? ' — ' + r.note : ''}${r.modificato ? ' ✏️' : ''}</span>
+            <span>${r.litri}lt × €${Number(r.importo||0).toFixed(2)} = €/lt ${Number(r.eurLt||0).toFixed(3)}${r.note ? ' — ' + r.note : ''}</span>
+            ${r.modificato ? `<span style="font-size:10px;color:var(--blu-l);font-weight:600">✏️ Modificato</span>` : ''}
           </div>
           <div class="record-mod">
             <button class="btn-edit" onclick='apriModifica(${JSON.stringify(r)}, "carburante")'>✏️ Correggi</button>
           </div>
         </li>`).join('');
     }
+    const ts = document.getElementById('miei-last-update');
+    if (ts) ts.textContent = 'Agg. ' + new Date().toLocaleTimeString('it-IT', {hour:'2-digit',minute:'2-digit'});
   } catch(e) {
     listV.innerHTML = '<li class="empty-state">Errore di rete — riprova</li>';
   }
@@ -1630,11 +1635,48 @@ function resetCarburante() {
 // ═══════════════════════════════════════════════════════════════
 let _editCtx = null;
 
-function apriModifica(record, tipo) {
-  _editCtx = { record, tipo };
-
+async function apriModifica(recordBase, tipo) {
+  // Mostra subito il modal con i dati che abbiamo, poi aggiorna dal server
   document.getElementById('edit-title').textContent = tipo === 'viaggio' ? '✏️ Correggi Viaggio' : '✏️ Correggi Rifornimento';
-  document.getElementById('edit-sub').textContent   = `Mezzo: ${record.targa} — ${record.data}`;
+  document.getElementById('edit-sub').textContent   = `Mezzo: ${recordBase.targa} — ${recordBase.data}`;
+  document.getElementById('edit-fields').innerHTML  =
+    '<div style="text-align:center;padding:20px;color:var(--testo-l)">🔄 Caricamento dati aggiornati…</div>';
+  openOverlay('overlay-edit');
+
+  // Leggi il record aggiornato dal server (cattura modifiche ufficio)
+  let record = recordBase;
+  try {
+    const res = await gasGet({ action:'record', tipo, id:recordBase.id,
+      matricola: ST.autista.matricola }, 0); // 0 = no cache, sempre fresco
+    if (res.ok && res.record) {
+      // Mappa i campi del server ai campi usati nel form
+      const r = res.record;
+      if (tipo === 'viaggio') {
+        record = { ...recordBase,
+          kmInizio:   r.KM_Inizio,
+          kmFine:     r.KM_Fine,
+          kmPercorsi: r.KM_Percorsi,
+          note:       r.Note,
+          stato:      r.Stato,
+          modificato: r.Modificato,
+        };
+      } else {
+        record = { ...recordBase,
+          litri:    r.Litri,
+          importo:  r.Importo,
+          eurLt:    r.EurLt,
+          tessera:  r.N_Tessera,
+          note:     r.Note,
+          modificato: r.Modificato,
+        };
+      }
+    }
+  } catch(e) {
+    // Se il server non risponde usa i dati locali
+    console.warn('apriModifica: uso dati locali', e);
+  }
+
+  _editCtx = { record, tipo };
 
   const fields = document.getElementById('edit-fields');
 
@@ -1690,7 +1732,7 @@ function apriModifica(record, tipo) {
     setTimeout(calcEltModifica, 50);
   }
 
-  openOverlay('overlay-edit');
+  // overlay già aperto all'inizio della funzione
 }
 
 function calcKmModifica() {
@@ -1765,9 +1807,21 @@ async function salvaModifica() {
     });
     if (!res.ok) { toast('⛔ ' + (res.error || 'Errore modifica'), 'rosso'); return; }
 
-    toast('✅ Dati aggiornati con successo!', 'verde');
+    // Mostra valori calcolati aggiornati dal server
+    let msgExtra = '';
+    if (res.aggiornato) {
+      const a = res.aggiornato;
+      if (tipo === 'viaggio' && a.KM_Percorsi !== undefined) {
+        msgExtra = ` — ${Number(a.KM_Percorsi).toLocaleString('it-IT')} km percorsi`;
+      }
+      if (tipo === 'carburante' && a.EurLt !== undefined) {
+        msgExtra = ` — €/Lt: ${Number(a.EurLt).toFixed(3)}`;
+      }
+    }
+    toast('✅ Aggiornato' + msgExtra, 'verde');
     closeEdit();
-    // Se era un turno aperto e ha modificato KM Inizio, aggiorna anche il turno locale
+
+    // Se era turno aperto, aggiorna anche il pannello fine turno
     if (tipo === 'viaggio' && window.__turnoAperto && window.__turnoAperto.id === record.id) {
       const nuovoIni = campi.find(c => c.campo === 'KM_Inizio');
       if (nuovoIni) {
@@ -1776,6 +1830,9 @@ async function salvaModifica() {
         document.getElementById('fine-km-ini').textContent = nuovoIni.valore;
       }
     }
+
+    // Invalida cache e ricarica lista
+    invalidaCache('mieIDati');
     caricaMieiDati();
 
   } catch(e) {
@@ -2141,30 +2198,24 @@ function mostraBannerNotifica(tipo, msg) {
 }
 </script>
 <script>
-// ── Registrazione Service Worker ───────────────────────────────
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then(reg => {
-      console.log('SW registrato:', reg.scope);
-
-      // Notifica all'utente quando è disponibile un aggiornamento
+    navigator.serviceWorker.register('sw.js').then(reg => {
       reg.addEventListener('updatefound', () => {
-        const newSW = reg.installing;
-        newSW.addEventListener('statechange', () => {
-          if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
-            // C'è una nuova versione disponibile
-            const banner = document.getElementById('notifica-turno');
-            if (banner) {
-              banner.style.background = '#1565c0';
-              banner.querySelector('#notifica-msg').textContent =
-                '🔄 Aggiornamento app disponibile — ricarica per applicarlo.';
-              banner.style.display = 'flex';
-              banner.onclick = () => window.location.reload();
+        const nw = reg.installing;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+            const b = document.getElementById('notifica-turno');
+            if (b) {
+              b.style.background = '#1565c0';
+              b.querySelector('#notifica-msg').textContent = '🔄 Aggiornamento disponibile — ricarica per applicarlo.';
+              b.style.display = 'flex';
+              b.onclick = () => window.location.reload();
             }
           }
         });
       });
-    }).catch(err => console.warn('SW non registrato:', err));
+    }).catch(e => console.warn('SW:', e));
   });
 }
 </script>

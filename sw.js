@@ -5,10 +5,10 @@
 
 const CACHE_NAME  = 'cam-registro-v10';
 const CACHE_FILES = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon.png',
+  '/AUTISTISDAPG/',
+  '/AUTISTISDAPG/index.html',
+  '/AUTISTISDAPG/manifest.json',
+  '/AUTISTISDAPG/icon.png',
 ];
 
 // ── Install: pre-cacha i file dell'app ──────────────────────────
@@ -69,7 +69,7 @@ self.addEventListener('fetch', event => {
       }).catch(() => {
         // Offline e non in cache: serve index.html (SPA fallback)
         if (event.request.destination === 'document') {
-          return caches.match('/index.html');
+          return caches.match('/AUTISTISDAPG/index.html');
         }
       });
     })
@@ -98,7 +98,7 @@ self.addEventListener('notificationclick', event => {
       for (const client of list) {
         if ('focus' in client) return client.focus();
       }
-      if (clients.openWindow) return clients.openWindow('/');
+      if (clients.openWindow) return clients.openWindow('/AUTISTISDAPG/');
     })
   );
 });
