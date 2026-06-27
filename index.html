@@ -783,6 +783,45 @@ const ST = {
   targaDefault: '',     // targa selezionata al login
 };
 
+// ── Formattazione date in italiano ──────────────────────────────
+function fmtData(str) {
+  // "2025-06-27" → "27/06/2025"
+  if (!str) return '—';
+  const s = String(str);
+  if (s.match(/^\d{4}-\d{2}-\d{2}/)) {
+    const [y, m, d] = s.slice(0, 10).split('-');
+    return `${d}/${m}/${y}`;
+  }
+  return s;
+}
+
+function fmtDataOra(str) {
+  // ISO "2025-06-27T11:34:22..." → "27/06/2025 11:34"
+  // IT  "27/06/2025 11:34:22"   → "27/06/2025 11:34"
+  if (!str) return '—';
+  const s = String(str);
+  // Formato ISO
+  if (s.match(/^\d{4}-\d{2}-\d{2}T/)) {
+    const d = new Date(s);
+    if (isNaN(d)) return s;
+    const pad = v => String(v).padStart(2,'0');
+    return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  // Già formato IT — tronca ai secondi
+  return s.slice(0, 16);
+}
+
+function fmtModificato(str) {
+  // "27/06/2025 11:34:22 — mod. da CAM001" → "27/06 11:34 · CAM001"
+  if (!str) return '';
+  const s = String(str);
+  const match = s.match(/(\d{2}\/\d{2}\/\d{4})\s(\d{2}:\d{2}).*?da\s+(\S+)/);
+  if (match) return `${match[1].slice(0,5)} ${match[2]} · ${match[3]}`;
+  // Fallback ISO
+  if (s.match(/^\d{4}-\d{2}-\d{2}T/)) return fmtDataOra(s.split(' da')[0]) + (s.includes(' da ') ? ' · ' + s.split(' da ')[1].split(' ')[0] : '');
+  return s.slice(0, 20);
+}
+
 const SK = {
   url:         'cam2_gasUrl',
   autista:     'cam2_autista',
@@ -1089,9 +1128,9 @@ async function caricaMieiDati() {
           return `<li class="record-item" style="${aperto ? 'background:#fff9c4' : ''}">
           <span class="record-icon">${aperto ? '🟡' : '🗺️'}</span>
           <div class="record-body">
-            <strong>${r.targa} — ${r.data} ${aperto ? '<span style="color:#b75e00;font-size:11px;font-weight:700">⚠️ TURNO APERTO</span>' : ''}</strong>
-            <span>${aperto ? `KM Inizio: ${r.kmInizio} — in attesa KM fine` : `${Number(r.kmPercorsi||0).toLocaleString('it-IT')} km (${r.kmInizio}→${r.kmFine})`}</span>
-            ${r.modificato ? `<span style="font-size:10px;color:var(--blu-l);font-weight:600">✏️ Modificato</span>` : ''}
+            <strong>${r.targa} — ${fmtData(r.data)} ${aperto ? '<span style="color:#b75e00;font-size:11px;font-weight:700">⚠️ TURNO APERTO</span>' : ''}</strong>
+            <span>${aperto ? `KM Inizio: ${Number(r.kmInizio||0).toLocaleString('it-IT')} — in attesa KM fine` : `${Number(r.kmPercorsi||0).toLocaleString('it-IT')} km &nbsp;(${Number(r.kmInizio||0).toLocaleString('it-IT')} → ${Number(r.kmFine||0).toLocaleString('it-IT')})`}</span>
+            ${r.modificato ? `<span style="font-size:10px;color:var(--blu-l);font-weight:600">✏️ ${fmtModificato(r.modificato)}</span>` : ''}
           </div>
           <div class="record-mod">
             <button class="btn-edit" onclick='apriModifica(${JSON.stringify(r)}, "viaggio")'>✏️</button>
@@ -1107,9 +1146,9 @@ async function caricaMieiDati() {
         <li class="record-item">
           <span class="record-icon">⛽</span>
           <div class="record-body">
-            <strong>${r.targa} — ${r.data}</strong>
-            <span>${r.litri}lt × €${Number(r.importo||0).toFixed(2)} = €/lt ${Number(r.eurLt||0).toFixed(3)}${r.note ? ' — ' + r.note : ''}</span>
-            ${r.modificato ? `<span style="font-size:10px;color:var(--blu-l);font-weight:600">✏️ Modificato</span>` : ''}
+            <strong>${r.targa} — ${fmtData(r.data)}</strong>
+            <span>${Number(r.litri||0).toFixed(2)} lt &nbsp;× €${Number(r.importo||0).toFixed(2)} &nbsp;= <strong>€/lt ${Number(r.eurLt||0).toFixed(3)}</strong>${r.note ? ' — ' + r.note : ''}</span>
+            ${r.modificato ? `<span style="font-size:10px;color:var(--blu-l);font-weight:600">✏️ ${fmtModificato(r.modificato)}</span>` : ''}
           </div>
           <div class="record-mod">
             <button class="btn-edit" onclick='apriModifica(${JSON.stringify(r)}, "carburante")'>✏️ Correggi</button>
@@ -1146,7 +1185,7 @@ async function onTargaViaggio() {
     } else {
       document.getElementById('storico-v-list').innerHTML = res.ultimi.map(r => `
         <div class="storico-row">
-          <span class="sr-data">${r.data} — ${r.autista}</span>
+          <span class="sr-data">${fmtData(r.data)} — ${r.autista}</span>
           <span class="sr-km">${r.kmInizio} → ${r.kmFine} <small style="font-weight:400;color:var(--testo-l)">(${r.kmPercorsi} km)</small></span>
         </div>`).join('');
       document.getElementById('storico-v-max').innerHTML =
@@ -1638,7 +1677,7 @@ let _editCtx = null;
 async function apriModifica(recordBase, tipo) {
   // Mostra subito il modal con i dati che abbiamo, poi aggiorna dal server
   document.getElementById('edit-title').textContent = tipo === 'viaggio' ? '✏️ Correggi Viaggio' : '✏️ Correggi Rifornimento';
-  document.getElementById('edit-sub').textContent   = `Mezzo: ${recordBase.targa} — ${recordBase.data}`;
+  document.getElementById('edit-sub').textContent   = `Mezzo: ${recordBase.targa} — ${fmtData(recordBase.data)}`;
   document.getElementById('edit-fields').innerHTML  =
     '<div style="text-align:center;padding:20px;color:var(--testo-l)">🔄 Caricamento dati aggiornati…</div>';
   openOverlay('overlay-edit');
