@@ -502,7 +502,15 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
 
           <div class="km-display" id="km-display" style="display:none">
             <div class="val" id="km-val">0</div>
-            <div class="lbl">KM PERCORSI NEL TURNO</div>
+            <div class="lbl">KM PERCORSI CALCOLATI (Fine − Inizio)</div>
+          </div>
+
+          <!-- Override manuale KM Percorsi -->
+          <div class="field" id="km-manuale-box" style="display:none">
+            <label>Correggi KM Percorsi <span style="font-size:10px;color:var(--testo-l);font-weight:400">(opzionale — lascia vuoto per usare il calcolato)</span></label>
+            <input type="number" id="v-km-perc-manuale" placeholder="es. 145"
+              inputmode="numeric" min="0"
+              style="font-size:18px;font-weight:700;color:var(--blu-m)">
           </div>
 
           <div class="anomalia" id="v-anomalia-fin-err">
@@ -1273,6 +1281,9 @@ function calcKmFine() {
     const km = fin - ini;
     disp.style.display = 'block';
     document.getElementById('km-val').textContent = km >= 0 ? km.toFixed(0) : '—';
+    // Mostra campo override manuale
+    const mBox = document.getElementById('km-manuale-box');
+    if (mBox) mBox.style.display = km >= 0 ? 'block' : 'none';
     if (km < 0) {
       errB.classList.add('show');
       document.getElementById('v-anomalia-fin-err-txt').textContent = `KM Fine (${fin}) < KM Inizio (${ini})!`;
@@ -1418,8 +1429,10 @@ async function inviaFineTurno() {
   const km  = fin - ini;
   if (fin < ini) { toast(`⛔ KM Fine (${fin}) < KM Inizio (${ini})!`, 'rosso'); return; }
 
+  const kmPercManuale = document.getElementById('v-km-perc-manuale')?.value;
   const payload = { action:'fine_turno', id:turno.id, kmFine:kmFin, note,
-    matricola:ST.autista.matricola, clientTs:Date.now() };
+    matricola:ST.autista.matricola, clientTs:Date.now(),
+    ...(kmPercManuale && parseFloat(kmPercManuale) > 0 ? { kmPercorsi: kmPercManuale } : {}) };
 
   if (km > 1500) {
     _pendingViaggioPayload = {...payload, _km:km};
@@ -1521,8 +1534,12 @@ function mostrareBannerCodaFineTurno(km) {
 
 function resetDopoChiusura(km) {
   // Pulisci form
-  ['v-km-ini','v-km-fin'].forEach(id => document.getElementById(id).value = '');
+  ['v-km-ini','v-km-fin','v-km-perc-manuale'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
   ['v-note-ini','v-note-fin'].forEach(id => document.getElementById(id).value = '');
+  const mBox = document.getElementById('km-manuale-box');
+  if (mBox) mBox.style.display = 'none';
   document.getElementById('v-targa').value = '';
   document.getElementById('storico-v').classList.remove('visible');
   document.getElementById('km-display').style.display = 'none';
