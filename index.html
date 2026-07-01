@@ -351,6 +351,7 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
 
 @keyframes rot {to{transform:rotate(360deg)}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes pulse-warn{0%,100%{box-shadow:0 0 0 0 rgba(198,40,40,.5)}50%{box-shadow:0 0 0 8px rgba(198,40,40,0)}}
 </style>
 </head>
 <body>
@@ -454,6 +455,17 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
             <div class="storico-km-max" id="storico-v-max"></div>
           </div>
 
+          <!-- Banner targa già in uso da altro collega -->
+          <div id="targa-occupata-banner" style="display:none;background:#c62828;color:#fff;
+            border-radius:var(--rs);padding:14px 16px;margin:10px 0;display:flex;
+            align-items:flex-start;gap:10px;line-height:1.5;animation:pulse-warn 1.5s infinite">
+            <span style="font-size:24px;flex-shrink:0">🚫</span>
+            <div>
+              <div style="font-weight:800;font-size:14px;margin-bottom:3px">MEZZO GIÀ IN USO</div>
+              <div style="font-size:13px" id="targa-occupata-testo">—</div>
+            </div>
+          </div>
+
           <div class="field">
             <label>KM Inizio Turno</label>
             <input type="number" id="v-km-ini" placeholder="es. 123456"
@@ -530,10 +542,10 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
             <span id="lbl-fin">🔴 Chiudi Turno</span>
           </button>
 
-          <div style="margin-top:10px">
-            <button class="btn ghost" style="font-size:13px;padding:10px" onclick="showStep('inizio')">
-              ← Registra nuovo mezzo / turno
-            </button>
+          <div style="margin-top:10px;text-align:center">
+            <span style="font-size:11px;color:var(--testo-l)">
+              ℹ️ Devi chiudere questo turno prima di poterne aprire un altro
+            </span>
           </div>
         </div>
       </div>
@@ -987,6 +999,14 @@ async function enterApp(autista, fresh) {
   window.addEventListener('online',  () => { updateNetUI(); syncQueue(); });
   window.addEventListener('offline', updateNetUI);
   setInterval(syncQueue, 45000);
+
+  // Ricontrolla periodicamente se la targa selezionata (step inizio,
+  // non ancora inviato) viene occupata da un collega nel frattempo
+  setInterval(() => {
+    if (window.__turnoAperto) return; // già in fase fine turno, non serve
+    const targaSel = document.getElementById('v-targa')?.value;
+    if (targaSel) checkTargaOccupata(targaSel);
+  }, 20000);
 }
 
 function impostaTargaDefault(targa) {
@@ -1176,11 +1196,23 @@ async function caricaMieiDati() {
 async function onTargaViaggio() {
   const targa = document.getElementById('v-targa').value;
   const box   = document.getElementById('storico-v');
-  if (!targa) { box.classList.remove('visible'); return; }
+  const banner = document.getElementById('targa-occupata-banner');
+
+  if (!targa) {
+    box.classList.remove('visible');
+    if (banner) banner.style.display = 'none';
+    aggiornaStatoBottoneIni(false);
+    return;
+  }
 
   box.classList.add('visible');
   document.getElementById('storico-v-list').innerHTML = '<div style="font-size:12px;color:var(--testo-l)">Caricamento storico…</div>';
   document.getElementById('storico-v-max').innerHTML  = '';
+  if (banner) banner.style.display = 'none';
+  aggiornaStatoBottoneIni(false);
+
+  // ── Controllo targa già in uso (tempo reale) ──────────────────
+  checkTargaOccupata(targa);
 
   try {
     const res = await gasGet({ action:'kmUltimi', targa }, 60);
@@ -1204,6 +1236,48 @@ async function onTargaViaggio() {
   }
 }
 
+// ── Verifica se la targa selezionata è già in uso da un collega ──
+let _targaOccupataAttuale = null;
+
+async function checkTargaOccupata(targa) {
+  if (!targa || !ST.autista) return;
+  try {
+    const res = await gasGet({ action:'targaOccupata', targa, matricola: ST.autista.matricola }, 0); // no cache, sempre fresco
+    const banner = document.getElementById('targa-occupata-banner');
+    const testo  = document.getElementById('targa-occupata-testo');
+
+    if (res.ok && res.occupata) {
+      _targaOccupataAttuale = res;
+      if (banner && testo) {
+        testo.textContent = `${res.autista} ha iniziato il turno con questo mezzo alle ${res.oraInizio || 'orario sconosciuto'} (KM ${res.kmInizio}). Verifica prima di procedere.`;
+        banner.style.display = 'flex';
+      }
+      aggiornaStatoBottoneIni(true);
+    } else {
+      _targaOccupataAttuale = null;
+      if (banner) banner.style.display = 'none';
+      aggiornaStatoBottoneIni(false);
+    }
+  } catch(e) {
+    // In caso di errore di rete non blocchiamo l'utente — il check
+    // server-side in saveInizioTurno farà comunque da rete di sicurezza
+    console.warn('checkTargaOccupata fallito:', e);
+  }
+}
+
+// Disabilita/abilita visivamente il bottone inizio turno
+function aggiornaStatoBottoneIni(bloccato) {
+  const btn = document.getElementById('btn-ini');
+  if (!btn) return;
+  if (bloccato) {
+    btn.style.opacity = '.5';
+    btn.style.cursor = 'not-allowed';
+  } else {
+    btn.style.opacity = '';
+    btn.style.cursor = '';
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  TURNO — STATO
 // ═══════════════════════════════════════════════════════════════
@@ -1212,13 +1286,40 @@ function getTurnoLocale() { try { const v=localStorage.getItem(TURNO_KEY); retur
 function setTurnoLocale(t) { localStorage.setItem(TURNO_KEY, t?JSON.stringify(t):''); }
 function clearTurnoLocale(){ localStorage.removeItem(TURNO_KEY); }
 
+// Il SERVER è l'unica fonte di verità sul turno aperto.
+// Il localStorage serve solo da cache per la UI, MAI come decisione finale.
 async function checkTurnoAperto() {
-  const locale = getTurnoLocale();
-  if (locale && locale.matricola === ST.autista.matricola) { applicaTurnoAperto(locale); return; }
   try {
-    const res = await gasGet({ action:'turnoAperto', matricola: ST.autista.matricola });
-    if (res.ok && res.turno) { setTurnoLocale({...res.turno, matricola:ST.autista.matricola}); applicaTurnoAperto(res.turno); }
-  } catch(e) {}
+    const res = await gasGet({ action:'turnoAperto', matricola: ST.autista.matricola }, 0); // no cache, sempre fresco
+
+    if (res.ok && res.turno) {
+      // C'è un turno aperto sul server (magari da un altro dispositivo)
+      setTurnoLocale({ ...res.turno, matricola: ST.autista.matricola });
+      // Apre DIRETTAMENTE lo step Fine Turno — non lascia scelta
+      // per evitare che l'utente apra un secondo turno per errore
+      showStepFine(res.turno);
+      toast('🔄 Turno aperto ripristinato dal server', 'acc');
+    } else {
+      // Nessun turno aperto sul server: pulisci eventuale residuo locale
+      // (può capitare se il turno è stato chiuso da un altro dispositivo)
+      const locale = getTurnoLocale();
+      if (locale && locale.matricola === ST.autista.matricola) {
+        clearTurnoLocale();
+        window.__turnoAperto = null;
+        showStep('inizio');
+      }
+      document.getElementById('banner-turno-aperto').style.display = 'none';
+    }
+  } catch(e) {
+    // Errore di rete: fallback temporaneo sul locale (solo per UX offline)
+    // ma SOLO se siamo davvero offline — altrimenti meglio bloccare
+    const locale = getTurnoLocale();
+    if (!navigator.onLine && locale && locale.matricola === ST.autista.matricola) {
+      applicaTurnoAperto(locale);
+    } else {
+      console.warn('checkTurnoAperto: impossibile verificare col server', e);
+    }
+  }
 }
 
 function applicaTurnoAperto(turno) {
@@ -1345,6 +1446,20 @@ async function inviaInizioTurno() {
   if (!targa) { toast('⚠️ Seleziona il mezzo', 'acc'); return; }
   if (!kmIni || isNaN(parseFloat(kmIni))) { toast('⚠️ Inserisci i KM Inizio', 'acc'); return; }
 
+  // ── Blocco: targa già occupata da un collega (controllo client) ──
+  if (_targaOccupataAttuale && _targaOccupataAttuale.occupata) {
+    toast(`🚫 Mezzo già in uso da ${_targaOccupataAttuale.autista}!`, 'rosso');
+    return;
+  }
+
+  // ── Doppio controllo fresco prima dell'invio (evita race condition
+  //    se un collega ha aperto il turno proprio in questo istante) ──
+  await checkTargaOccupata(targa);
+  if (_targaOccupataAttuale && _targaOccupataAttuale.occupata) {
+    toast(`🚫 Mezzo appena occupato da ${_targaOccupataAttuale.autista}! Scegli un altro mezzo.`, 'rosso');
+    return;
+  }
+
   const kmMax = ST.kmMax[targa] || 0;
   const ini   = parseFloat(kmIni);
   const payload = { action:'inizio_turno', data, targa, kmInizio: kmIni, note,
@@ -1394,10 +1509,33 @@ async function _eseguiInizioTurno(payload) {
       if (payload.targa) ST.kmMax[payload.targa] = Math.max(ST.kmMax[payload.targa]||0, parseFloat(payload.kmInizio));
       toast('🟢 Inizio turno registrato!', 'verde');
       showStepFine(turno);
+    } else if (res.turnoGiaAperto) {
+      // ⛔ L'AUTISTA STESSO ha già un turno aperto (da un altro dispositivo
+      // o sessione). Mostra quel turno invece di crearne uno nuovo.
+      toast('⚠️ Hai già un turno aperto — lo recupero', 'acc');
+      if (res.dettagli) {
+        const turnoEsistente = { ...res.dettagli, matricola: ST.autista.matricola };
+        setTurnoLocale(turnoEsistente);
+        showStepFine(turnoEsistente);
+      } else {
+        // Fallback: rilancia il controllo dal server
+        checkTurnoAperto();
+      }
+    } else if (res.conflittoTarga) {
+      // ⛔ CONFLITTO TARGA: NON salvare in coda, NON aprire il turno.
+      // Un altro autista ha già il mezzo — blocco definitivo.
+      toast('🚫 ' + (res.error || 'Mezzo già in uso da un collega'), 'rosso');
+      const banner = document.getElementById('targa-occupata-banner');
+      const testo  = document.getElementById('targa-occupata-testo');
+      if (banner && testo && res.dettagli) {
+        testo.textContent = `${res.dettagli.autista} ha già questo mezzo in uso (KM ${res.dettagli.kmInizio}). Scegli un altro mezzo o contatta l'ufficio.`;
+        banner.style.display = 'flex';
+      }
+      aggiornaStatoBottoneIni(true);
+      // NON chiamare setTurnoLocale/addQueue/showStepFine — resta sullo step inizio
     } else {
-      // Server risponde con errore specifico
+      // Altro errore server (validazione, ecc.) → mostra messaggio, salva in coda
       toast('⛔ ' + (res.error || 'Errore server'), 'rosso');
-      // Salva comunque localmente per non perdere il turno
       setTurnoLocale(turnoLocale);
       addQueue({...payload, _isTurnoInizio:true});
       showStepFine(turnoLocale);
