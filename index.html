@@ -842,6 +842,25 @@ function fmtModificato(str) {
   return s.slice(0, 20);
 }
 
+// ── Data locale (non UTC) ── corregge bug timezone ────────────
+// toISOString() restituisce la data in UTC: alle 23:00 in Italia
+// (UTC+2) è ancora "ieri" UTC. Questa funzione usa il fuso locale.
+function dataOggiLocale() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const g = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${g}`;
+}
+
+function dataLocale(d) {
+  // Converte qualsiasi Date in YYYY-MM-DD locale (no UTC)
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const g = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${g}`;
+}
+
 const SK = {
   url:         'cam2_gasUrl',
   autista:     'cam2_autista',
@@ -857,7 +876,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // URL già configurato nel codice — nessuna configurazione richiesta
 
   // Ripristina sessione — ma scade a mezzanotte
-  const oggi        = new Date().toISOString().slice(0, 10);
+  const oggi        = dataOggiLocale();
   const sessionDate = lsGet(SK.sessionDate);
   const saved       = lsGet(SK.autista);
 
@@ -977,7 +996,7 @@ async function enterApp(autista, fresh) {
   ST.autista = autista;
   if (fresh) lsSet(SK.autista, JSON.stringify(autista));
   // Salva data sessione per scadenza a mezzanotte
-  lsSet(SK.sessionDate, new Date().toISOString().slice(0, 10));
+  lsSet(SK.sessionDate, dataOggiLocale());
   schedulaLogoutMezzanotte();
 
   document.getElementById('screen-login').classList.remove('active');
@@ -2291,7 +2310,7 @@ function hideLoginErr() { document.getElementById('login-err').classList.remove(
 
 function setDate(id) {
   const el = document.getElementById(id);
-  if (el && !el.value) el.value = new Date().toISOString().substring(0,10);
+  if (el && !el.value) el.value = dataOggiLocale();
 }
 
 // LS helpers
