@@ -1306,23 +1306,41 @@ function setTurnoLocale(t) { localStorage.setItem(TURNO_KEY, t?JSON.stringify(t)
 function clearTurnoLocale(){ localStorage.removeItem(TURNO_KEY); }
 
 // Il SERVER è l'unica fonte di verità sul turno aperto.
-// Il localStorage serve solo da cache per la UI, MAI come decisione finale.
 async function checkTurnoAperto() {
+  const locale = getTurnoLocale();
+
+  // ── Caso 1: ID locale (era in coda offline, mai arrivato al server)
+  // L'ID inizia con "LOCAL_" → non cercare sul server, aspetta la sync
+  if (locale && locale.matricola === ST.autista.matricola && locale.id && String(locale.id).startsWith('LOCAL_')) {
+    // Il turno è ancora in coda — controlla se si è sincronizzato
+    const coda = getQueue();
+    const ancora = coda.some(item => item._isTurnoInizio && item.clientTs === locale._clientTs);
+    if (ancora) {
+      // Ancora in coda — usa il locale per ora (siamo offline)
+      applicaTurnoAperto(locale);
+      toast('📶 Turno in attesa di sincronizzazione', 'acc');
+      return;
+    }
+    // Non più in coda → si è sincronizzato, aggiorna l'ID dal server
+    // (ricade nel controllo server sotto)
+    clearTurnoLocale();
+  }
+
+  // ── Caso 2: Verifica sempre dal server (fonte di verità)
   try {
-    const res = await gasGet({ action:'turnoAperto', matricola: ST.autista.matricola }, 0); // no cache, sempre fresco
+    const res = await gasGet({ action:'turnoAperto', matricola: ST.autista.matricola }, 0);
 
     if (res.ok && res.turno) {
-      // C'è un turno aperto sul server (magari da un altro dispositivo)
-      setTurnoLocale({ ...res.turno, matricola: ST.autista.matricola });
-      // Apre DIRETTAMENTE lo step Fine Turno — non lascia scelta
-      // per evitare che l'utente apra un secondo turno per errore
-      showStepFine(res.turno);
-      toast('🔄 Turno aperto ripristinato dal server', 'acc');
+      // Turno trovato sul server → sincronizza il locale e apri Fine Turno
+      const turnoServer = { ...res.turno, matricola: ST.autista.matricola };
+      setTurnoLocale(turnoServer);
+      showStepFine(turnoServer);
+      // Avvisa solo se non era già in Fine Turno (evita toast ridondante)
+      if (!window.__turnoAperto) toast('🔄 Turno ripristinato', 'acc');
     } else {
-      // Nessun turno aperto sul server: pulisci eventuale residuo locale
-      // (può capitare se il turno è stato chiuso da un altro dispositivo)
-      const locale = getTurnoLocale();
-      if (locale && locale.matricola === ST.autista.matricola) {
+      // Nessun turno aperto sul server
+      const loc = getTurnoLocale();
+      if (loc && loc.matricola === ST.autista.matricola) {
         clearTurnoLocale();
         window.__turnoAperto = null;
         showStep('inizio');
@@ -1330,11 +1348,10 @@ async function checkTurnoAperto() {
       document.getElementById('banner-turno-aperto').style.display = 'none';
     }
   } catch(e) {
-    // Errore di rete: fallback temporaneo sul locale (solo per UX offline)
-    // ma SOLO se siamo davvero offline — altrimenti meglio bloccare
-    const locale = getTurnoLocale();
-    if (!navigator.onLine && locale && locale.matricola === ST.autista.matricola) {
-      applicaTurnoAperto(locale);
+    // Errore di rete: usa il locale SE offline, altrimenti avvisa
+    const loc = getTurnoLocale();
+    if (!navigator.onLine && loc && loc.matricola === ST.autista.matricola) {
+      applicaTurnoAperto(loc);
     } else {
       console.warn('checkTurnoAperto: impossibile verificare col server', e);
     }
@@ -1497,8 +1514,10 @@ async function inviaInizioTurno() {
 
 async function _eseguiInizioTurno(payload) {
   setBtnLoading('btn-ini','spin-ini','lbl-ini', true);
-  const turnoLocale = { id:'LOCAL_'+Date.now(), targa:payload.targa,
-    kmInizio:payload.kmInizio, data:payload.data, note:payload.note, matricola:payload.matricola };
+  const _cts = payload.clientTs || Date.now();
+  const turnoLocale = { id:'LOCAL_'+_cts, targa:payload.targa,
+    kmInizio:payload.kmInizio, data:payload.data, note:payload.note,
+    matricola:payload.matricola, _clientTs: _cts };
 
   if (!navigator.onLine) {
     setTurnoLocale(turnoLocale);
@@ -2085,6 +2104,17 @@ async function syncQueue() {
       if (res.ok) {
         syncCount++;
         if (item._isTurnoInizio) {
+          // Aggiorna l'ID nel turno locale: LOCAL_xxx → ID reale del server
+          const loc = getTurnoLocale();
+          if (loc && res.id && loc.matricola === item.matricola) {
+            loc.id = res.id;
+            delete loc._clientTs;
+            setTurnoLocale(loc);
+            // Aggiorna anche il turno corrente in memoria
+            if (window.__turnoAperto && window.__turnoAperto.matricola === item.matricola) {
+              window.__turnoAperto.id = res.id;
+            }
+          }
           const bi = document.getElementById('banner-ini-coda');
           if (bi) bi.remove();
         }
@@ -2411,6 +2441,7 @@ function mostraBannerNotifica(tipo, msg) {
 }
 </script>
 <script>
+// ── Service Worker + aggiornamento automatico ─────────────────
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').then(reg => {
@@ -2418,19 +2449,61 @@ if ('serviceWorker' in navigator) {
         const nw = reg.installing;
         nw.addEventListener('statechange', () => {
           if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-            const b = document.getElementById('notifica-turno');
-            if (b) {
-              b.style.background = '#1565c0';
-              b.querySelector('#notifica-msg').textContent = '🔄 Aggiornamento disponibile — ricarica per applicarlo.';
-              b.style.display = 'flex';
-              b.onclick = () => window.location.reload();
+            if (!window.__turnoAperto) {
+              window.location.reload();
+            } else {
+              const b = document.getElementById('notifica-turno');
+              if (b) {
+                b.style.background = '#1565c0';
+                b.querySelector('#notifica-msg').textContent =
+                  '🔄 Aggiornamento disponibile — verrà applicato alla chiusura del turno.';
+                b.style.display = 'flex';
+              }
             }
           }
         });
       });
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!window.__turnoAperto) window.location.reload();
+      });
     }).catch(e => console.warn('SW:', e));
   });
 }
+
+// ── Rilevamento riattivazione (visibilitychange) ───────────────
+let _ultimaVisita = Date.now();
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { _ultimaVisita = Date.now(); return; }
+
+  const oggi = dataOggiLocale();
+  const sessionDate = lsGet(SK.sessionDate);
+  const secondiAssenza = (Date.now() - _ultimaVisita) / 1000;
+
+  // Passata mezzanotte? Logout
+  if (sessionDate && sessionDate !== oggi && ST.autista) {
+    logoutSilenzioso('\uD83C\uDF19 Nuovo giorno — effettua di nuovo il login.');
+    return;
+  }
+  // Via da >10 min? Ricontrolla turno
+  if (secondiAssenza > 600 && ST.autista) checkTurnoAperto();
+  // Chiedi al SW di controllare aggiornamenti
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.getRegistration().then(reg => { if (reg) reg.update(); });
+  }
+});
+
+// ── Controllo mezzanotte ogni minuto ──────────────────────────
+setInterval(() => {
+  if (document.hidden || !ST.autista) return;
+  const oggi = dataOggiLocale();
+  const saved = lsGet(SK.sessionDate);
+  if (saved && saved !== oggi) {
+    logoutSilenzioso('\uD83C\uDF19 Nuovo giorno — effettua di nuovo il login.');
+  } else if (oggi) {
+    lsSet(SK.sessionDate, oggi);
+  }
+}, 60000);
 </script>
 </body>
 </html>

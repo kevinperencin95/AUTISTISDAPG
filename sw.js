@@ -1,79 +1,77 @@
 // ================================================================
-//  C.A.M. Srl — Service Worker PWA
-//  Gestisce cache offline e aggiornamenti in background
+//  C.A.M. Srl — Service Worker PWA v2
+//  Strategia: Network-first con fallback cache
+//  Aggiornamento: automatico al riavvio dell'app
 // ================================================================
 
-const CACHE_NAME  = 'cam-registro-v10';
-const CACHE_FILES = [
+const CACHE_VERSION = 'cam-registro-v28';
+const CACHE_FILES   = [
   '/AUTISTISDAPG/',
   '/AUTISTISDAPG/index.html',
   '/AUTISTISDAPG/manifest.json',
   '/AUTISTISDAPG/icon.png',
 ];
 
-// ── Install: pre-cacha i file dell'app ──────────────────────────
+// ── Install ──────────────────────────────────────────────────────
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.addAll(CACHE_FILES);
-    }).then(() => {
-      // Attiva immediatamente senza aspettare che le vecchie tab si chiudano
-      return self.skipWaiting();
-    })
+    caches.open(CACHE_VERSION)
+      .then(cache => cache.addAll(CACHE_FILES))
+      .then(() => self.skipWaiting()) // attiva subito, senza aspettare
   );
 });
 
-// ── Activate: rimuovi cache vecchie ─────────────────────────────
+// ── Activate: pulisci cache vecchie e prendi controllo ───────────
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(
-        keys
-          .filter(key => key !== CACHE_NAME)
-          .map(key => caches.delete(key))
-      )
-    ).then(() => self.clients.claim())
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(k => k !== CACHE_VERSION).map(k => caches.delete(k))
+      ))
+      .then(() => self.clients.claim()) // prende controllo di tutte le tab aperte
   );
 });
 
-// ── Fetch: strategia Network-first per GAS, Cache-first per app ─
+// ── Fetch: Network-first per i file dell'app ─────────────────────
+// Tenta sempre la rete → aggiornamento automatico ad ogni apertura.
+// Se la rete non risponde, serve la cache → funziona offline.
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Richieste al GAS (script.google.com): sempre rete, mai cache
-  // Il SW non può intercettare cross-origin con credenziali,
-  // ma lo gestiamo esplicitamente per chiarezza
+  // GAS: sempre rete diretta, mai cache
   if (url.hostname.includes('script.google.com')) {
     event.respondWith(fetch(event.request));
     return;
   }
 
-  // Richieste all'app: Cache-first con fallback rete
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
+  // Solo richieste GET verso la nostra app
+  if (event.request.method !== 'GET') return;
+  if (!url.pathname.startsWith('/AUTISTISDAPG')) return;
 
-      return fetch(event.request).then(response => {
-        // Cacha solo risposte valide e dello stesso dominio
-        if (
-          response &&
-          response.status === 200 &&
-          response.type === 'basic'
-        ) {
+  event.respondWith(
+    // Network-first: prova la rete con timeout 3s
+    Promise.race([
+      fetch(event.request.clone()).then(response => {
+        if (response && response.status === 200 && response.type === 'basic') {
           const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => {
-            cache.put(event.request, clone);
-          });
+          caches.open(CACHE_VERSION).then(cache => cache.put(event.request, clone));
         }
         return response;
-      }).catch(() => {
-        // Offline e non in cache: serve index.html (SPA fallback)
-        if (event.request.destination === 'document') {
-          return caches.match('/AUTISTISDAPG/index.html');
-        }
-      });
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+    ]).catch(() => {
+      // Rete non disponibile o lenta → fallback cache
+      return caches.match(event.request)
+        .then(cached => cached || caches.match('/AUTISTISDAPG/index.html'));
     })
   );
+});
+
+// ── Messaggio dall'app: forza aggiornamento ───────────────────────
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 // ── Push Notifications ───────────────────────────────────────────
@@ -82,10 +80,10 @@ self.addEventListener('push', event => {
   const data = event.data.json();
   event.waitUntil(
     self.registration.showNotification(data.title || 'C.A.M. Srl', {
-      body:    data.body   || '',
-      icon:    '/icon.png',
-      badge:   '/icon.png',
-      tag:     data.tag    || 'cam-notifica',
+      body:     data.body  || '',
+      icon:     '/AUTISTISDAPG/icon.png',
+      badge:    '/AUTISTISDAPG/icon.png',
+      tag:      data.tag   || 'cam-notifica',
       renotify: true,
     })
   );
@@ -98,7 +96,7 @@ self.addEventListener('notificationclick', event => {
       for (const client of list) {
         if ('focus' in client) return client.focus();
       }
-      if (clients.openWindow) return clients.openWindow('/AUTISTISDAPG/');
+      return clients.openWindow('/AUTISTISDAPG/');
     })
   );
 });
