@@ -4,7 +4,7 @@
 //  Aggiornamento: automatico al riavvio dell'app
 // ================================================================
 
-const CACHE_VERSION = 'cam-registro-v28';
+const CACHE_VERSION = 'cam-registro-v30';
 const CACHE_FILES   = [
   '/AUTISTISDAPG/',
   '/AUTISTISDAPG/index.html',
@@ -67,10 +67,19 @@ self.addEventListener('fetch', event => {
   );
 });
 
-// ── Messaggio dall'app: forza aggiornamento ───────────────────────
+// ── Messaggi dall'app ─────────────────────────────────────────────
 self.addEventListener('message', event => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
+  if (!event.data) return;
+  if (event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
+  }
+  // Reset di mezzanotte: svuota tutta la cache runtime
+  if (event.data.type === 'CLEAR_CACHE') {
+    event.waitUntil(
+      caches.keys().then(keys =>
+        Promise.all(keys.map(k => caches.delete(k)))
+      )
+    );
   }
 });
 
