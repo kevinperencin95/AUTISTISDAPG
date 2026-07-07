@@ -889,6 +889,42 @@ const SK = {
   sessionDate: 'cam2_sessionDate', // data YYYY-MM-DD dell'ultimo accesso
 };
 
+// ══ Purga rigida sessioni vecchie (chiamata a OGNI login) ══════
+// Elimina qualsiasi traccia di giorni precedenti: turno locale,
+// item in coda non di oggi, cache in memoria. Silenziosa e sicura.
+function purgaVecchieSessioni() {
+  const oggi = dataOggiLocale();
+
+  // Turno locale: elimina se non è di oggi
+  try {
+    const t = JSON.parse(localStorage.getItem('cam2_turno') || 'null');
+    if (t && t.data) {
+      const dataT = normalizzaDataApp(t.data);
+      if (dataT !== oggi) {
+        localStorage.removeItem('cam2_turno');
+        console.warn('Purga: turno locale di', dataT, 'eliminato');
+      }
+    }
+  } catch(e) { localStorage.removeItem('cam2_turno'); }
+
+  // Coda: tieni solo item di oggi
+  try {
+    const q = JSON.parse(localStorage.getItem(SK.queue) || '[]');
+    const qOggi = q.filter(item => {
+      const dataItem = item.data ? normalizzaDataApp(item.data) : oggi;
+      return dataItem === oggi;
+    });
+    if (qOggi.length !== q.length) {
+      console.warn(`Purga: ${q.length - qOggi.length} item di coda vecchi eliminati`);
+      localStorage.setItem(SK.queue, JSON.stringify(qOggi));
+    }
+  } catch(e) { localStorage.setItem(SK.queue, '[]'); }
+
+  // Cache in memoria
+  if (window.__gasCache) window.__gasCache = {};
+  window.__turnoAperto = null;
+}
+
 // ══ Reset completo per nuovo giorno ═══════════════════════════
 // Pulisce: sessione autista, targa, turno locale, coda stantia, cache
 function resetNuovoGiorno() {
@@ -1064,6 +1100,11 @@ function confermaMezzo() {
 }
 
 async function enterApp(autista, fresh) {
+  // ══ PURGA RIGIDA: al login esiste SOLO oggi ══════════════════
+  // Qualsiasi residuo di giorni precedenti viene eliminato PRIMA
+  // di qualsiasi altra operazione: turno locale, coda stantia, cache.
+  purgaVecchieSessioni();
+
   ST.autista = autista;
   if (fresh) lsSet(SK.autista, JSON.stringify(autista));
   // Salva data sessione per scadenza a mezzanotte
@@ -1418,7 +1459,8 @@ async function checkTurnoAperto() {
         window.__turnoAperto = null;
         document.getElementById('banner-turno-aperto').style.display = 'none';
         showStep('inizio');
-        toast(`⚠️ Turno del ${fmtData(dataTurno)} non chiuso — contatta l'ufficio`, 'acc');
+        // Silenzioso: il server ha già marcato il turno come NON CHIUSO —
+        // l'ufficio lo vede evidenziato in arancione nel foglio.
         return;
       }
 
