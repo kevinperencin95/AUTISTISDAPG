@@ -615,12 +615,12 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
           <div class="row2">
             <div class="field">
               <label>Litri Erogati</label>
-              <input type="number" id="c-litri" placeholder="es. 45.50"
+              <input type="text" inputmode="decimal" id="c-litri" placeholder="es. 45,50"
                 inputmode="decimal" step="0.01" min="0" oninput="calcElt()">
             </div>
             <div class="field">
               <label>Importo Totale €</label>
-              <input type="number" id="c-importo" placeholder="es. 78.23"
+              <input type="text" inputmode="decimal" id="c-importo" placeholder="es. 78,20"
                 inputmode="decimal" step="0.01" min="0" oninput="calcElt()">
             </div>
           </div>
@@ -804,6 +804,16 @@ const ST = {
 };
 
 // ── Formattazione date in italiano ──────────────────────────────
+// Normalizza numero con virgola/punto italiano: "24,4" → 24.4
+function numeroIT(val) {
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  let s = String(val || '').trim().replace(/[€\s]/g, '');
+  if (!s) return 0;
+  if (s.indexOf(',') >= 0) s = s.replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+
 // Normalizza qualsiasi formato data a YYYY-MM-DD (fuso locale)
 function normalizzaDataApp(val) {
   if (!val) return '';
@@ -1573,8 +1583,8 @@ function calcKmFine() {
 }
 
 function calcElt() {
-  const l = parseFloat(document.getElementById('c-litri').value)   || 0;
-  const i = parseFloat(document.getElementById('c-importo').value) || 0;
+  const l = numeroIT(document.getElementById('c-litri').value);
+  const i = numeroIT(document.getElementById('c-importo').value);
   const d = document.getElementById('elt-display');
   const w = document.getElementById('elt-warn');
   const a = document.getElementById('c-anomalia');
@@ -1967,14 +1977,15 @@ async function inviaCarburante() {
   const targa   = document.getElementById('c-targa').value;
   const panel   = document.getElementById('c-pin-panel');
   const tessera = panel.dataset.num || '';
-  const litri   = document.getElementById('c-litri').value;
-  const importo = document.getElementById('c-importo').value;
+  // Normalizza subito: virgola → punto, rimuove €
+  const litri   = numeroIT(document.getElementById('c-litri').value);
+  const importo = numeroIT(document.getElementById('c-importo').value);
   const note    = document.getElementById('c-note').value.trim();
 
   if (!data)    { toast('⚠️ Inserisci la data', 'acc'); return; }
   if (!targa)   { toast('⚠️ Targa non impostata — riavvia e scegli il mezzo', 'acc'); return; }
   if (!tessera) { toast('⚠️ Seleziona la tessera carburante', 'acc'); return; }
-  if (!litri || parseFloat(litri) <= 0)    { toast('⚠️ Inserisci i litri', 'acc'); return; }
+  if (litri <= 0)   { toast('⚠️ Inserisci i litri', 'acc'); return; }
   if (!importo || parseFloat(importo) <= 0){ toast('⚠️ Inserisci l\'importo', 'acc'); return; }
 
   const payload = {

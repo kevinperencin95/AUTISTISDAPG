@@ -4,7 +4,7 @@
 //  Aggiornamento: automatico al riavvio dell'app
 // ================================================================
 
-const CACHE_VERSION = 'cam-registro-v33';
+const CACHE_VERSION = 'cam-registro-v35';
 const CACHE_FILES   = [
   '/AUTISTISDAPG/',
   '/AUTISTISDAPG/index.html',
