@@ -1171,8 +1171,12 @@ async function enterApp(autista, fresh) {
   // Imposta targa di default su tutti i campi mezzo
   if (ST.targaDefault) impostaTargaDefault(ST.targaDefault);
 
-  caricaMieiDati();
-  checkTurnoAperto();
+  // ══ ALLINEAMENTO ALL'AVVIO (sequenza obbligata) ═══════════════
+  // 1) Invia SUBITO le registrazioni in coda (i dati locali vanno al
+  //    server PRIMA di leggere lo stato, così il check vede la verità)
+  // 2) Verifica lo stato turno reale sul server e allineati
+  // 3) Carica lo storico personale aggiornato
+  avvioAllineamento();
 
   // Timer e listener di sync registrati UNA SOLA VOLTA
   // (prima erano duplicati → sync sovrapposti e doppi invii)
@@ -1282,32 +1286,63 @@ function doLogout() {
 // ═══════════════════════════════════════════════════════════════
 //  CARICA DATI MASTER
 // ═══════════════════════════════════════════════════════════════
+function popolaMezzi(mezzi) {
+  ST.mezzi = mezzi;
+  const vSel = document.getElementById('v-targa');
+  if (vSel) {
+    vSel.innerHTML = '<option value="">— seleziona mezzo —</option>';
+    mezzi.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value       = m.targa;
+      opt.textContent = `[${m.cartellina}]  ${m.targa}`;
+      vSel.appendChild(opt);
+    });
+  }
+}
+
 async function caricaMezzi() {
   try {
     const res = await gasGet({ action:'mezzi' }, 300);
-    if (!res.ok || !res.mezzi) return;
-    ST.mezzi = res.mezzi;
-    // Solo il select viaggio (carburante usa display+hidden)
-    const vSel = document.getElementById('v-targa');
-    if (vSel) {
-      vSel.innerHTML = '<option value="">— seleziona mezzo —</option>';
-      res.mezzi.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value       = m.targa;
-        opt.textContent = `[${m.cartellina}]  ${m.targa}`;
-        vSel.appendChild(opt);
-      });
+    if (res.ok && res.mezzi && res.mezzi.length) {
+      popolaMezzi(res.mezzi);
+      // Cache offline: senza rete l'elenco mezzi resta disponibile
+      try { localStorage.setItem('cam2_mezziCache', JSON.stringify(res.mezzi)); } catch(_) {}
+      return;
     }
-  } catch(e) { console.error('caricaMezzi', e); }
+    throw new Error('risposta vuota');
+  } catch(e) {
+    // Rete assente/lenta: usa l'ultimo elenco salvato — l'autista può
+    // comunque selezionare il mezzo e registrare (andrà in coda)
+    try {
+      const cached = JSON.parse(localStorage.getItem('cam2_mezziCache') || 'null');
+      if (cached && cached.length) {
+        popolaMezzi(cached);
+        console.warn('[CAM-SYNC] Mezzi da cache offline (' + cached.length + ')');
+      }
+    } catch(_) {}
+  }
 }
 
 async function caricaTessereCarb() {
   try {
     const res = await gasGet({ action:'tessera' }, 300);
-    if (!res.ok) return;
-    ST.tessere = res.tessere || [];
-    popolaCarbTessere();
-  } catch(e) { console.error('caricaTessereCarb', e); }
+    if (res.ok && res.tessere && res.tessere.length) {
+      ST.tessere = res.tessere;
+      popolaCarbTessere();
+      try { localStorage.setItem('cam2_tessereCache', JSON.stringify(res.tessere)); } catch(_) {}
+      return;
+    }
+    throw new Error('risposta vuota');
+  } catch(e) {
+    try {
+      const cached = JSON.parse(localStorage.getItem('cam2_tessereCache') || 'null');
+      if (cached && cached.length) {
+        ST.tessere = cached;
+        popolaCarbTessere();
+        console.warn('[CAM-SYNC] Tessere da cache offline (' + cached.length + ')');
+      }
+    } catch(_) {}
+  }
 }
 
 function popolaCarbTessere() {
@@ -1479,6 +1514,32 @@ function clearTurnoLocale(){ localStorage.removeItem(TURNO_KEY); }
 //  - Riapre SOLO turni di OGGI (turni di ieri = segnalati, non riaperti)
 //  - Gestisce ID LOCAL_ (turno aperto offline, ancora in coda)
 //  - Il localStorage è solo cache UI, mai decisione finale
+// ── Allineamento completo all'avvio: coda → stato server → storico ──
+async function avvioAllineamento() {
+  const t0 = Date.now();
+  const codaIniziale = getQueue().length;
+  console.log('[CAM-SYNC] Avvio allineamento — coda pendente: ' + codaIniziale);
+
+  // 1) Spingi i dati locali al server (registrazioni in coda)
+  if (codaIniziale > 0 && navigator.onLine) {
+    try { await syncQueue(); } catch(e) { console.warn('[CAM-SYNC] sync avvio:', e); }
+  }
+
+  // 2) Allinea lo stato turno con il server (fonte di verità)
+  try { await checkTurnoAperto(); } catch(e) { console.warn('[CAM-SYNC] check avvio:', e); }
+
+  // 3) Storico personale aggiornato
+  caricaMieiDati();
+
+  const codaFinale = getQueue().length;
+  const ms = Date.now() - t0;
+  console.log('[CAM-SYNC] Allineamento completato in ' + ms + 'ms — coda residua: ' + codaFinale);
+  if (codaIniziale > 0 && codaFinale === 0) {
+    toast('✅ Registrazioni precedenti sincronizzate!', 'verde');
+  }
+  updateNetUI();
+}
+
 async function checkTurnoAperto() {
   const oggi   = dataOggiLocale();
   const locale = getTurnoLocale();
@@ -2792,6 +2853,8 @@ if ('serviceWorker' in navigator) {
 // ── Controllo nuovo giorno al ritorno in foreground ─────────────
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
+  // Coda pendente? Tenta subito la sincronizzazione al ritorno in app
+  if (getQueue().length > 0 && navigator.onLine) syncQueue();
   const oggi = dataOggiLocale();
   const sessionDate = lsGet(SK.sessionDate);
   if (ST.autista && sessionDate && sessionDate !== oggi) {
