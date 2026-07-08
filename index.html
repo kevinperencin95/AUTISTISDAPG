@@ -1032,16 +1032,26 @@ async function doLogin() {
   hideLoginErr();
 
   try {
-    const res  = await gasGet({ action:'login', matricola: m });
+    // Timeout 10s: su rete pessima non lasciamo l'autista in attesa infinita
+    const res  = await gasGet({ action:'login', matricola: m }, 0, 10000);
     if (!res.ok) {
       if (res.disabilitato) {
         // Autista rimosso/disabilitato — messaggio specifico
         showLoginErr("⛔ Accesso non consentito. Contatta l'ufficio.");
+        // Invalida anche l'eventuale cache login offline
+        try { localStorage.removeItem('cam2_loginCache_' + m); } catch(_) {}
       } else {
         showLoginErr(res.error || 'Matricola non trovata.');
       }
       return;
     }
+
+    // Login OK: salva cache per accesso offline futuro (validità 7 giorni)
+    try {
+      localStorage.setItem('cam2_loginCache_' + m, JSON.stringify({
+        autista: res, ts: Date.now()
+      }));
+    } catch(_) {}
 
     // Mostra popup conferma
     document.getElementById('confirm-nome').textContent  = res.nomeCompleto;
@@ -1052,7 +1062,23 @@ async function doLogin() {
     window.__pendingAutista = res;
 
   } catch(e) {
-    showLoginErr('Errore di connessione. Verifica la rete e riprova.');
+    // ══ RETE NON DISPONIBILE: fallback da cache recente ══════════
+    // Se questa matricola ha fatto login con successo negli ultimi
+    // 7 giorni SU QUESTO TELEFONO, consenti l'accesso offline.
+    // Il server rivalida comunque tutto alla sincronizzazione.
+    try {
+      const cached = JSON.parse(localStorage.getItem('cam2_loginCache_' + m) || 'null');
+      const SETTE_GIORNI = 7 * 24 * 60 * 60 * 1000;
+      if (cached && cached.autista && (Date.now() - cached.ts) < SETTE_GIORNI) {
+        toast('📶 Rete assente — accesso offline (verificato di recente)', 'acc');
+        document.getElementById('confirm-nome').textContent = cached.autista.nomeCompleto;
+        document.getElementById('confirm-matr').textContent = cached.autista.matricola;
+        openOverlay('overlay-confirm');
+        window.__pendingAutista = cached.autista;
+        return;
+      }
+    } catch(_) {}
+    showLoginErr('📶 Rete assente e nessun accesso recente da questo telefono. Spostati dove c\'è segnale per il primo login.');
   } finally {
     setBtnLoading('btn-login','spin-login','lbl-login', false);
   }
@@ -1390,7 +1416,9 @@ let _targaOccupataAttuale = null;
 async function checkTargaOccupata(targa) {
   if (!targa || !ST.autista) return;
   try {
-    const res = await gasGet({ action:'targaOccupata', targa, matricola: ST.autista.matricola }, 0); // no cache, sempre fresco
+    // Timeout 4s: su rete lenta il controllo non deve bloccare l'autista
+    // (il server rifà comunque la verifica al salvataggio)
+    const res = await gasGet({ action:'targaOccupata', targa, matricola: ST.autista.matricola }, 0, 4000);
     const banner = document.getElementById('targa-occupata-banner');
     const testo  = document.getElementById('targa-occupata-testo');
 
@@ -1698,7 +1726,9 @@ async function _eseguiInizioTurno(payload) {
     updateNetUI(); return;
   }
   try {
-    const res = await gasPost(payload);
+    // INTERATTIVO: 8 secondi max, 1 tentativo. Se la rete è lenta si passa
+    // subito alla coda — l'autista non deve MAI aspettare lo spinner.
+    const res = await gasPost(payload, 1, 8000, 1);
     if (res.ok) {
       const turno = {...turnoLocale, id:res.id};
       setTurnoLocale(turno);
@@ -1740,7 +1770,7 @@ async function _eseguiInizioTurno(payload) {
     // Errore di rete → salva in coda
     setTurnoLocale(turnoLocale);
     addQueue({...payload, _isTurnoInizio:true});
-    toast('📶 Nessuna connessione — turno salvato in coda', 'acc');
+    toast('✅ Inizio turno registrato! Si sincronizza appena c\'è rete', 'verde');
     showStepFine(turnoLocale);
   } finally {
     setBtnLoading('btn-ini','spin-ini','lbl-ini', false);
@@ -1784,7 +1814,8 @@ async function _eseguiFineTurno(payload, km) {
   mostraStatoInvio('Invio in corso…', 'grigio');
 
   try {
-    const res = await gasPost(payload);
+    // INTERATTIVO: 8s max, 1 tentativo — mai far aspettare l'autista
+    const res = await gasPost(payload, 1, 8000, 1);
 
     if (res.ok) {
       // ✅ SUCCESSO — chiudi il turno
@@ -1806,7 +1837,7 @@ async function _eseguiFineTurno(payload, km) {
       // 📶 RETE KO — dato in coda, turno rimane aperto
       addQueue({ ...payload, _kmPercorsi: km, _isFine: true });
       mostrareBannerCodaFineTurno(km);
-      toast('📶 Nessuna connessione — dato salvato in coda', 'acc');
+      toast('✅ Turno registrato! Si sincronizza da solo appena c\'è rete', 'verde');
     } else {
       // ⚠️ Altro errore (JSON malformato, redirect GAS, ecc.) — in coda per sicurezza
       addQueue({ ...payload, _kmPercorsi: km, _isFine: true });
@@ -1962,7 +1993,8 @@ function toggleCarbPin() {
 async function _eseguiInvio(payload, btnId, spinId, lblId, resetFn) {
   setBtnLoading(btnId, spinId, lblId, true);
   try {
-    const res = await gasPost(payload);
+    // INTERATTIVO: 8s max, 1 tentativo
+    const res = await gasPost(payload, 1, 8000, 1);
     if (res.ok) {
       toast('✅ Registrato con successo!', 'verde');
       resetFn();
@@ -1973,7 +2005,7 @@ async function _eseguiInvio(payload, btnId, spinId, lblId, resetFn) {
   } catch(e) {
     // Errore di rete dopo retry → in coda
     addQueue(payload);
-    toast('📶 Nessuna connessione — salvato in coda', 'acc');
+    toast('✅ Registrato! Si sincronizza da solo appena c\'è rete', 'verde');
     resetFn();
   } finally {
     setBtnLoading(btnId, spinId, lblId, false);
@@ -2413,7 +2445,7 @@ async function syncQueue() {
 // ═══════════════════════════════════════════════════════════════
 // Cache in-memory per GET (evita chiamate ridondanti)
 const _gasCache = {};
-async function gasGet(params, ttlSec = 0) {
+async function gasGet(params, ttlSec = 0, timeoutMs = 12000) {
   const url = new URL(ST.gasUrl);
   Object.keys(params).forEach(k => url.searchParams.set(k, params[k]));
   const key = url.toString();
@@ -2422,10 +2454,17 @@ async function gasGet(params, ttlSec = 0) {
     return _gasCache[key].data;
   }
 
-  const res  = await fetch(key, { method:'GET' });
-  const data = await res.json();
-  if (ttlSec > 0) _gasCache[key] = { data, ts: Date.now() };
-  return data;
+  // Timeout: su rete pessima un GET senza limite può pendere minuti
+  const ctrl = new AbortController();
+  const tid  = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res  = await fetch(key, { method:'GET', signal: ctrl.signal });
+    const data = await res.json();
+    if (ttlSec > 0) _gasCache[key] = { data, ts: Date.now() };
+    return data;
+  } finally {
+    clearTimeout(tid);
+  }
 }
 
 function invalidaCache(prefix) {
@@ -2437,9 +2476,9 @@ function invalidaCache(prefix) {
 //   RETE_KO  → fetch fallisce (offline vero, DNS, timeout lungo)
 //   SERVER_ERR → GAS risponde ma con ok:false
 //   SUCCESSO   → GAS risponde con ok:true
-async function gasPost(payload, tentativo = 1) {
-  const MAX_TENTAVI = 2;
-  const TIMEOUT_MS  = 35000; // 35s: GAS con LockService può impiegare fino a 30s
+async function gasPost(payload, tentativo = 1, timeoutMs = 35000, maxTentativi = 2) {
+  const MAX_TENTAVI = maxTentativi;
+  const TIMEOUT_MS  = timeoutMs; // interattivo: 8s (l'autista non aspetta); coda background: 35s
 
   const ctrl = new AbortController();
   const tid  = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -2481,7 +2520,7 @@ async function gasPost(payload, tentativo = 1) {
     // Timeout volontario o errore di rete → ritenta una volta se non è l'ultimo tentativo
     if (tentativo < MAX_TENTAVI) {
       await new Promise(r => setTimeout(r, 2000));
-      return gasPost(payload, tentativo + 1);
+      return gasPost(payload, tentativo + 1, timeoutMs, maxTentativi);
     }
 
     // Tutti i tentativi esauriti → rilancia con flag _networkError
