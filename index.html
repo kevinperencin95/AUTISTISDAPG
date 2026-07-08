@@ -1008,9 +1008,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
   setDate('v-data'); setDate('c-data');
   updateNetUI();
-  window.addEventListener('online',  () => { updateNetUI(); syncQueue(); });
-  window.addEventListener('offline', updateNetUI);
-  setInterval(syncQueue, 45000);
+  // Timer e listener di sync registrati UNA SOLA VOLTA
+  // (prima erano duplicati → sync sovrapposti e doppi invii)
+  if (!window.__syncTimerAttivo) {
+    window.__syncTimerAttivo = true;
+    window.addEventListener('online',  () => { updateNetUI(); syncQueue(); });
+    window.addEventListener('offline', updateNetUI);
+    setInterval(syncQueue, 45000);
+  }
 
   // Avvia notifiche turno
   avviaNotifiche();
@@ -1137,9 +1142,14 @@ async function enterApp(autista, fresh) {
   caricaMieiDati();
   checkTurnoAperto();
 
-  window.addEventListener('online',  () => { updateNetUI(); syncQueue(); });
-  window.addEventListener('offline', updateNetUI);
-  setInterval(syncQueue, 45000);
+  // Timer e listener di sync registrati UNA SOLA VOLTA
+  // (prima erano duplicati → sync sovrapposti e doppi invii)
+  if (!window.__syncTimerAttivo) {
+    window.__syncTimerAttivo = true;
+    window.addEventListener('online',  () => { updateNetUI(); syncQueue(); });
+    window.addEventListener('offline', updateNetUI);
+    setInterval(syncQueue, 45000);
+  }
 
   // Ricontrolla periodicamente se la targa selezionata (step inizio,
   // non ancora inviato) viene occupata da un collega nel frattempo
@@ -2234,83 +2244,168 @@ function getQueue()  { try { return JSON.parse(localStorage.getItem(SK.queue)||'
 function addQueue(p) { const q=getQueue(); q.push(p); localStorage.setItem(SK.queue,JSON.stringify(q)); }
 
 async function syncQueue() {
+  // ── Anti-concorrenza: mai due sync sovrapposti ─────────────────
+  // (due esecuzioni parallele causavano doppi invii e sovrascritture
+  //  della coda con perdita degli item aggiunti nel frattempo)
+  if (window.__syncInCorso) return;
+  if (!navigator.onLine || !ST.gasUrl) return;
   let q = getQueue();
-  if (!q.length || !navigator.onLine || !ST.gasUrl) return;
+  if (!q.length) return;
 
-  // Scarta item di giorni PRECEDENTI (non vanno mai reinviati:
-  // rischierebbero di riaprire/chiudere sessioni sbagliate)
-  const oggi = dataOggiLocale();
-  const qOriginale = q.length;
-  q = q.filter(item => {
-    const dataItem = item.data ? normalizzaDataApp(item.data) : oggi;
-    return dataItem === oggi;
-  });
-  if (q.length !== qOriginale) {
-    localStorage.setItem(SK.queue, JSON.stringify(q));
-    console.warn(`syncQueue: scartati ${qOriginale - q.length} item di giorni precedenti`);
-    if (!q.length) { updateNetUI(); return; }
-  }
+  window.__syncInCorso = true;
+  const chiave = item => String(item.clientTs || '') + '|' + String(item.action || '');
+  const daRimuovere = new Set(); // item completati (successo o scarto definitivo)
+  const daAggiornare = {};       // item da aggiornare in coda (es. contatore tentativi)
 
-  const rem = [];
-  let syncCount = 0;
-  let fineTurnoSyncato = false;
+  try {
+    const oggi = dataOggiLocale();
 
-  for (const item of q) {
-    // Pulizia: rimuovi campi interni prima di inviare al GAS
-    const payload = { ...item };
-    delete payload._kmPercorsi;
-    delete payload._isFine;
-    delete payload._isTurnoInizio;
+    // Item di giorni precedenti: marcali per rimozione (mai reinviarli)
+    q.forEach(item => {
+      const dataItem = item.data ? normalizzaDataApp(item.data) : oggi;
+      if (dataItem !== oggi) {
+        daRimuovere.add(chiave(item));
+        console.warn('syncQueue: scartato item di giorno precedente', item.action);
+      }
+    });
+    q = q.filter(item => !daRimuovere.has(chiave(item)));
 
-    try {
-      const res = await gasPost(payload);
-      if (res.ok) {
-        syncCount++;
-        if (item._isTurnoInizio) {
+    // ── ORDINE GARANTITO: inizio_turno PRIMA di fine_turno ────────
+    // (se il fine parte prima dell'inizio, il server non trova il turno)
+    const priorita = a => a.action === 'inizio_turno' ? 0 : (a.action === 'fine_turno' ? 2 : 1);
+    q.sort((a, b) => priorita(a) - priorita(b) || (a.clientTs || 0) - (b.clientTs || 0));
+
+    let syncCount = 0;
+    let fineTurnoSyncato = false;
+
+    for (const item of q) {
+      const payload = { ...item };
+      delete payload._kmPercorsi;
+      delete payload._isFine;
+      delete payload._isTurnoInizio;
+      delete payload._syncTentativi;
+
+      try {
+        const res = await gasPost(payload);
+
+        if (res.ok) {
+          daRimuovere.add(chiave(item));
+          syncCount++;
+          if (item._isTurnoInizio) {
+            // Aggiorna ID locale: LOCAL_xxx → ID reale
+            const loc = getTurnoLocale();
+            if (loc && res.id && loc.matricola === item.matricola) {
+              loc.id = res.id;
+              delete loc._clientTs;
+              setTurnoLocale(loc);
+              if (window.__turnoAperto) window.__turnoAperto.id = res.id;
+            }
+            const bi = document.getElementById('banner-ini-coda');
+            if (bi) bi.remove();
+          }
+          if (item._isFine) {
+            fineTurnoSyncato = true;
+            const kmP = item._kmPercorsi || res.kmPercorsi || 0;
+            clearTurnoLocale();
+            window.__turnoAperto = null;
+            const b = document.getElementById('banner-fine-coda');
+            if (b) b.remove();
+            const si = document.getElementById('stato-invio-fin');
+            if (si) si.remove();
+            resetDopoChiusura(kmP);
+          }
+        }
+        else if (res.turnoGiaAperto && item._isTurnoInizio) {
+          // Il primo invio era GIÀ arrivato (risposta persa per rete):
+          // il turno esiste sul server → è un SUCCESSO, non un errore.
+          // Recupera l'ID reale e rimuovi dalla coda (prima restava
+          // bloccato in retry infinito).
+          daRimuovere.add(chiave(item));
+          syncCount++;
+          if (res.dettagli && res.dettagli.id) {
+            const loc = getTurnoLocale();
+            if (loc && loc.matricola === item.matricola) {
+              loc.id = res.dettagli.id;
+              delete loc._clientTs;
+              setTurnoLocale(loc);
+              if (window.__turnoAperto) window.__turnoAperto.id = res.dettagli.id;
+            }
+          }
           const bi = document.getElementById('banner-ini-coda');
           if (bi) bi.remove();
         }
-        if (item._isFine) {
-          fineTurnoSyncato = true;
-          const kmP = item._kmPercorsi || res.kmPercorsi || 0;
-          clearTurnoLocale();
-          window.__turnoAperto = null;
-          const b = document.getElementById('banner-fine-coda');
-          if (b) b.remove();
-          const si = document.getElementById('stato-invio-fin');
-          if (si) si.remove();
-          resetDopoChiusura(kmP); // porta al login con messaggio
-          // caricaMieiDati non serve: l'utente è stato sloggato
+        else if (res.error && res.error.includes('non trovato') && item.action === 'fine_turno') {
+          // Il turno non esiste (ancora) sul server. Se in coda c'è un
+          // inizio_turno della stessa matricola NON ancora sincronizzato,
+          // il fine deve ASPETTARE (non scartare!). Altrimenti: tentativi.
+          const inizioInAttesa = q.some(x =>
+            x.action === 'inizio_turno' &&
+            x.matricola === item.matricola &&
+            !daRimuovere.has(chiave(x)));
+          if (inizioInAttesa) {
+            // riprova al prossimo giro (l'inizio verrà sincronizzato prima)
+          } else {
+            const tent = (item._syncTentativi || 0) + 1;
+            if (tent >= 3) {
+              daRimuovere.add(chiave(item));
+              console.warn('Sync: fine_turno scartato dopo 3 tentativi (turno inesistente)');
+            } else {
+              daAggiornare[chiave(item)] = tent;
+            }
+          }
         }
-      } else if (res.error && res.error.includes('non trovato')) {
-        // Record non trovato sul server (es. ID locale da offline) → scarta senza retry
-        syncCount++;
-        console.warn('Sync: record scartato:', res.error);
-      } else {
-        rem.push(item); // altro errore server → riprova dopo
-      }
-    } catch(e) {
-      if (e._networkError) {
-        rem.push(item); // rete ko → riprova dopo
-      } else {
-        // Errore inatteso → riprova max 3 volte poi scarta
-        const tentativi = (item._syncTentativi || 0) + 1;
-        if (tentativi < 3) rem.push({ ...item, _syncTentativi: tentativi });
-        else console.warn('Sync: item scartato dopo 3 tentativi', item.action);
+        else if (res.error && res.error.includes('non trovato')) {
+          daRimuovere.add(chiave(item));
+          syncCount++;
+          console.warn('Sync: record scartato:', res.error);
+        }
+        else {
+          // Errore server logico → riprova max 5 volte poi scarta
+          const tent = (item._syncTentativi || 0) + 1;
+          if (tent >= 5) {
+            daRimuovere.add(chiave(item));
+            console.warn('Sync: item scartato dopo 5 errori server', item.action, res.error);
+          } else {
+            daAggiornare[chiave(item)] = tent;
+          }
+        }
+      } catch(e) {
+        if (e._networkError) {
+          // Rete caduta: STOP totale del giro. Continuare romperebbe
+          // l'ordine (il fine partirebbe senza l'inizio). Riprova al
+          // prossimo giro con la coda intatta.
+          break;
+        }
+        const tent = (item._syncTentativi || 0) + 1;
+        if (tent >= 3) {
+          daRimuovere.add(chiave(item));
+          console.warn('Sync: item scartato dopo 3 errori imprevisti', item.action);
+        } else {
+          daAggiornare[chiave(item)] = tent;
+        }
       }
     }
-  }
 
-  localStorage.setItem(SK.queue, JSON.stringify(rem));
+    // ── RIMOZIONE SICURA: rileggi la coda REALE e togli solo i completati.
+    // Gli item aggiunti DURANTE il sync restano intatti (prima venivano
+    // cancellati dalla sovrascrittura totale → perdita dati).
+    const codaAttuale = getQueue();
+    const codaNuova = codaAttuale
+      .filter(item => !daRimuovere.has(chiave(item)))
+      .map(item => {
+        const k = chiave(item);
+        return daAggiornare[k] !== undefined ? { ...item, _syncTentativi: daAggiornare[k] } : item;
+      });
+    localStorage.setItem(SK.queue, JSON.stringify(codaNuova));
 
-  if (syncCount > 0) {
-    const msg = fineTurnoSyncato
-      ? `✅ Turno chiuso e sincronizzato!`
-      : `✅ Sincronizzati ${syncCount} invii`;
-    toast(msg, 'verde');
+    if (syncCount > 0) {
+      toast(fineTurnoSyncato ? '✅ Turno chiuso e sincronizzato!' : `✅ Sincronizzati ${syncCount} invii`, 'verde');
+    }
+    updateNetUI();
+    renderRecenti && renderRecenti();
+  } finally {
+    window.__syncInCorso = false;
   }
-  updateNetUI();
-  renderRecenti && renderRecenti();
 }
 
 // ═══════════════════════════════════════════════════════════════
