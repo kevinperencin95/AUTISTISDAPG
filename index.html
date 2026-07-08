@@ -427,7 +427,7 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
     <!-- ─── VIAGGIO ─────────────────────────────────────── -->
     <div class="page active" id="page-viaggio">
       <div class="queue-banner" id="qb-v">
-        ⚠️ <span id="qc-v">0</span> invii in coda — verranno inviati appena torni online.
+        ✅ Tutto registrato! <span id="qc-v">0</span> invii in attesa di rete — si sincronizzano da soli, puoi continuare a lavorare.
       </div>
 
       <!-- STEP 1: INIZIO TURNO -->
@@ -565,7 +565,7 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
     <!-- ─── CARBURANTE ───────────────────────────────────── -->
     <div class="page" id="page-carburante">
       <div class="queue-banner" id="qb-c">
-        ⚠️ <span id="qc-c">0</span> invii in coda — verranno inviati appena torni online.
+        ✅ Tutto registrato! <span id="qc-c">0</span> invii in attesa di rete — si sincronizzano da soli, puoi continuare a lavorare.
       </div>
 
       <div class="card">
@@ -1148,6 +1148,12 @@ async function enterApp(autista, fresh) {
 
   ST.autista = autista;
   if (fresh) lsSet(SK.autista, JSON.stringify(autista));
+  // Telefono condiviso: se il turno locale appartiene a un ALTRO autista,
+  // eliminalo (il suo turno è al sicuro sul server, lo ritroverà lui)
+  const _locAltro = getTurnoLocale();
+  if (_locAltro && String(_locAltro.matricola) !== String(autista.matricola)) {
+    clearTurnoLocale();
+  }
   // Salva data sessione per scadenza a mezzanotte
   lsSet(SK.sessionDate, dataOggiLocale());
   schedulaLogoutMezzanotte();
@@ -1259,6 +1265,12 @@ function doLogout() {
   if (!confirm('Vuoi uscire dall\'app?')) return;
   lsSet(SK.autista, '');
   lsSet(SK.sessionDate, '');
+  // Telefoni condivisi: NON lasciare il turno locale di questo autista
+  // in giro per il prossimo che fa login (il server lo custodisce comunque
+  // e lo ripristina al suo prossimo accesso). La coda invece RESTA:
+  // contiene dati da sincronizzare, mai cancellarla.
+  clearTurnoLocale();
+  window.__turnoAperto = null;
   clearTimeout(window.__logoutTimer);
   ST.autista      = null;
   ST.targaDefault = '';
@@ -1470,6 +1482,27 @@ function clearTurnoLocale(){ localStorage.removeItem(TURNO_KEY); }
 async function checkTurnoAperto() {
   const oggi   = dataOggiLocale();
   const locale = getTurnoLocale();
+
+  // ══ CHIUSURA GIÀ REGISTRATA IN CODA ══════════════════════════
+  // L'autista ha GIÀ chiuso il turno (offline): il fine_turno è in
+  // coda in attesa di rete. NON richiedere di nuovo i KM — mostra
+  // lo stato "chiuso, in sincronizzazione" e tenta subito l'invio.
+  const codaFine = getQueue().find(item =>
+    item._isFine && ST.autista &&
+    String(item.matricola) === String(ST.autista.matricola) &&
+    normalizzaDataApp(item.data || '') === oggi);
+  if (codaFine) {
+    const t = locale || { targa: codaFine.targa, kmInizio: '', data: oggi };
+    showStepFine(t);
+    // Precompila i KM già inseriti e blocca il bottone (già chiuso!)
+    const kmFinEl = document.getElementById('v-km-fin');
+    if (kmFinEl && codaFine.kmFine) kmFinEl.value = codaFine.kmFine;
+    const btnFin = document.getElementById('btn-fin');
+    if (btnFin) { btnFin.style.opacity = '.5'; btnFin.style.pointerEvents = 'none'; }
+    mostrareBannerCodaFineTurno(codaFine._kmPercorsi || codaFine.kmFine || '');
+    syncQueue(); // tenta subito
+    return;
+  }
 
   // ── Turno locale con ID LOCAL_ (aperto offline, in attesa di sync)
   if (locale && locale.matricola === ST.autista.matricola &&
@@ -2337,6 +2370,8 @@ async function syncQueue() {
           }
           if (item._isFine) {
             fineTurnoSyncato = true;
+            const btnFin = document.getElementById('btn-fin');
+            if (btnFin) { btnFin.style.opacity = ''; btnFin.style.pointerEvents = ''; }
             const kmP = item._kmPercorsi || res.kmPercorsi || 0;
             clearTurnoLocale();
             window.__turnoAperto = null;
@@ -2431,7 +2466,12 @@ async function syncQueue() {
     localStorage.setItem(SK.queue, JSON.stringify(codaNuova));
 
     if (syncCount > 0) {
-      toast(fineTurnoSyncato ? '✅ Turno chiuso e sincronizzato!' : `✅ Sincronizzati ${syncCount} invii`, 'verde');
+      const codaResidua = getQueue().length;
+      let msg;
+      if (fineTurnoSyncato)      msg = '✅ Turno chiuso e sincronizzato!';
+      else if (codaResidua === 0) msg = '✅ Tutto sincronizzato col server!';
+      else                        msg = `✅ Sincronizzati ${syncCount} invii (${codaResidua} in attesa)`;
+      toast(msg, 'verde');
     }
     updateNetUI();
     renderRecenti && renderRecenti();
