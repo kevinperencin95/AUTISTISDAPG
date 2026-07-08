@@ -1193,7 +1193,8 @@ async function enterApp(autista, fresh) {
     if (window.__turnoAperto) return; // già in fase fine turno, non serve
     const targaSel = document.getElementById('v-targa')?.value;
     if (targaSel) checkTargaOccupata(targaSel);
-  }, 20000);
+  }, 45000); // 45s: con ~60 autisti in turno riduce il carico server, il
+             // doppio check pre-invio resta la protezione principale
 }
 
 function impostaTargaDefault(targa) {
