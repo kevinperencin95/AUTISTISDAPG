@@ -1876,10 +1876,44 @@ async function _eseguiInizioTurno(payload) {
 // ═══════════════════════════════════════════════════════════════
 //  INVIO FINE TURNO
 // ═══════════════════════════════════════════════════════════════
+// Aggiorna il turno con i dati FRESCHI dal server (modifiche ufficio):
+// KM inizio o targa possono essere stati corretti dal referente sul foglio
+async function refreshTurnoDalServer(turno) {
+  if (!navigator.onLine || !ST.gasUrl || !turno || String(turno.id).startsWith('LOCAL_')) return turno;
+  try {
+    const res = await gasGet({ action:'turnoAperto', matricola: ST.autista.matricola }, 0, 5000);
+    if (res && res.ok && res.turno) {
+      const kmVecchi = Number(turno.kmInizio);
+      const kmNuovi  = Number(res.turno.kmInizio);
+      const aggiornato = { ...turno, id: res.turno.id,
+        targa: res.turno.targa, kmInizio: res.turno.kmInizio };
+      window.__turnoAperto = aggiornato;
+      setTurnoLocale(aggiornato);
+      // Aggiorna il pannello
+      const elKm = document.getElementById('fine-km-ini');
+      const elTg = document.getElementById('fine-targa');
+      if (elKm) elKm.textContent = aggiornato.kmInizio;
+      if (elTg) elTg.textContent = aggiornato.targa;
+      if (kmNuovi !== kmVecchi && kmVecchi > 0) {
+        toast(`ℹ️ KM Inizio aggiornati dall'ufficio: ${kmNuovi.toLocaleString('it-IT')}`, 'acc');
+      }
+      return aggiornato;
+    }
+  } catch(_) { /* offline o lento: si prosegue coi valori locali */ }
+  return turno;
+}
+
 async function inviaFineTurno() {
   if (!ST.autista) return;
-  const turno = window.__turnoAperto;
+  let turno = window.__turnoAperto;
   if (!turno)  { toast('⛔ Nessun turno aperto!', 'rosso'); return; }
+
+  // ── REFRESH PRE-CHIUSURA: recupera eventuali correzioni dell'ufficio
+  // (KM inizio/targa modificati sul foglio) prima di validare e inviare.
+  // Max 5 secondi; se offline si prosegue coi valori locali (il server
+  // ricalcola comunque i KM percorsi dalla riga reale del foglio).
+  turno = await refreshTurnoDalServer(turno);
+
   const kmFin = document.getElementById('v-km-fin').value;
   const note  = document.getElementById('v-note-fin').value.trim();
   if (!kmFin || isNaN(parseFloat(kmFin))) { toast('⚠️ Inserisci i KM Fine', 'acc'); return; }
@@ -2368,7 +2402,17 @@ function closeEdit() { closeOverlay('overlay-edit'); _editCtx = null; }
 
 
 function getQueue()  { try { return JSON.parse(localStorage.getItem(SK.queue)||'[]'); } catch(e){return[];} }
-function addQueue(p) { const q=getQueue(); q.push(p); localStorage.setItem(SK.queue,JSON.stringify(q)); }
+function addQueue(p) {
+  const q = getQueue();
+  // Deduplica: lo stesso invio (clientTs+azione) non entra due volte in coda
+  const k = String(p.clientTs || '') + '|' + String(p.action || '');
+  if (p.clientTs && q.some(x => (String(x.clientTs||'')+'|'+String(x.action||'')) === k)) {
+    console.warn('[CAM-SYNC] addQueue: item già in coda, ignorato', p.action);
+    return;
+  }
+  q.push(p);
+  localStorage.setItem(SK.queue, JSON.stringify(q));
+}
 
 async function syncQueue() {
   // ── Anti-concorrenza: mai due sync sovrapposti ─────────────────
@@ -2856,6 +2900,8 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   // Coda pendente? Tenta subito la sincronizzazione al ritorno in app
   if (getQueue().length > 0 && navigator.onLine) syncQueue();
+  // Turno aperto? Aggiorna i dati dal server (modifiche ufficio)
+  if (window.__turnoAperto && ST.autista) refreshTurnoDalServer(window.__turnoAperto);
   const oggi = dataOggiLocale();
   const sessionDate = lsGet(SK.sessionDate);
   if (ST.autista && sessionDate && sessionDate !== oggi) {
