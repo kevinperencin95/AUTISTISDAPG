@@ -1756,7 +1756,8 @@ let _pendingViaggioPayload = null;
 
 async function inviaInizioTurno() {
   if (!ST.autista) return;
-  const data  = document.getElementById('v-data').value;
+  const data  = dataOggiLocale(); // SEMPRE oggi al momento dell'invio
+  setDate('v-data'); // riallinea anche il campo visibile
   const targa = document.getElementById('v-targa').value;
   const kmIni = document.getElementById('v-km-ini').value;
   const note  = document.getElementById('v-note-ini').value.trim();
@@ -2144,7 +2145,8 @@ async function _eseguiInvio(payload, btnId, spinId, lblId, resetFn) {
 
 async function inviaCarburante() {
   if (!ST.autista) return;
-  const data    = document.getElementById('c-data').value;
+  const data    = dataOggiLocale(); // SEMPRE oggi al momento dell'invio
+  setDate('c-data');
   const targa   = document.getElementById('c-targa').value;
   const panel   = document.getElementById('c-pin-panel');
   const tessera = panel.dataset.num || '';
@@ -2771,8 +2773,10 @@ function showLoginErr(msg) {
 function hideLoginErr() { document.getElementById('login-err').classList.remove('show'); }
 
 function setDate(id) {
+  // Aggiorna SEMPRE alla data odierna: il vecchio check "solo se vuoto"
+  // conservava la data di IERI se l'app restava aperta oltre mezzanotte
   const el = document.getElementById(id);
-  if (el && !el.value) el.value = dataOggiLocale();
+  if (el) el.value = dataOggiLocale();
 }
 
 // LS helpers
@@ -2898,6 +2902,8 @@ if ('serviceWorker' in navigator) {
 // ── Controllo nuovo giorno al ritorno in foreground ─────────────
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
+  // Riallinea i campi data visibili (possono essere rimasti a ieri)
+  setDate('v-data'); setDate('c-data');
   // Coda pendente? Tenta subito la sincronizzazione al ritorno in app
   if (getQueue().length > 0 && navigator.onLine) syncQueue();
   // Turno aperto? Aggiorna i dati dal server (modifiche ufficio)
