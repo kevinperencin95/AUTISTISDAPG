@@ -1616,20 +1616,12 @@ async function checkTurnoAperto() {
     const res = await gasGet({ action:'turnoAperto', matricola: ST.autista.matricola }, 0);
 
     if (res.ok && res.turno) {
-      const dataTurno = normalizzaDataApp(res.turno.data);
-
-      // Turno di un giorno PRECEDENTE rimasto aperto → NON riaprirlo
-      if (dataTurno && dataTurno !== oggi) {
-        clearTurnoLocale();
-        window.__turnoAperto = null;
-        document.getElementById('banner-turno-aperto').style.display = 'none';
-        showStep('inizio');
-        // Silenzioso: il server ha già marcato il turno come NON CHIUSO —
-        // l'ufficio lo vede evidenziato in arancione nel foglio.
-        return;
-      }
-
-      // Turno di OGGI → ripristina e apri direttamente Fine Turno
+      // Il SERVER garantisce già che un turno restituito qui è sempre
+      // e solo quello di oggi (lo scade automaticamente prima di
+      // rispondere, con la data ancorata al fuso italiano). Un ricontrollo
+      // qui con "oggi" calcolato dall'orologio del TELEFONO era ridondante
+      // e, su un dispositivo con fuso orario diverso dall'Italia, poteva
+      // scartare per errore un turno che era invece regolarmente di oggi.
       const turnoServer = { ...res.turno, matricola: ST.autista.matricola };
       setTurnoLocale(turnoServer);
       showStepFine(turnoServer);
