@@ -810,7 +810,7 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
 // ═══════════════════════════════════════════════════════════════
 //  VERSIONE APP — bump ad ogni release
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION = 'v85';
+const APP_VERSION = 'v86';
 
 // ═══════════════════════════════════════════════════════════════
 //  AUTO-AGGIORNAMENTO SILENZIOSO — eseguito PRIMA di ogni altra cosa.
@@ -1178,8 +1178,12 @@ function closeConfirm(sì) {
     document.getElementById('matricola-input').focus();
     return;
   }
-  // Prima della app: selezione mezzo
-  apriSelezioneMezzo();
+  // Va DIRETTAMENTE dentro l'app — non più tramite la vecchia finestra
+  // di selezione mezzo obbligatoria, che costringeva a scegliere una
+  // targa PRIMA ancora che il sistema controllasse se esisteva già un
+  // turno aperto da riprendere (causa del bug: turno aperto ignorato).
+  // enterApp() fa tutto il necessario, inclusa la verifica del turno.
+  enterApp(window.__pendingAutista, true);
 }
 
 function apriSelezioneMezzo() {
