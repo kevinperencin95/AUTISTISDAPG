@@ -808,6 +808,67 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
 <script>
 'use strict';
 // ═══════════════════════════════════════════════════════════════
+//  VERSIONE APP — bump ad ogni release
+// ═══════════════════════════════════════════════════════════════
+const APP_VERSION = 'v85';
+
+// ═══════════════════════════════════════════════════════════════
+//  AUTO-AGGIORNAMENTO SILENZIOSO — eseguito PRIMA di ogni altra cosa.
+// I browser controllano se il Service Worker è cambiato solo di tanto
+// in tanto, non ad ogni apertura: un telefono può restare bloccato su
+// una versione vecchia per mesi senza che nessuno se ne accorga. Qui
+// l'app si controlla DA SOLA: scarica il proprio file index.html
+// direttamente dalla rete (bypassando completamente cache e Service
+// Worker con {cache:'no-store'}), legge quale versione è REALMENTE
+// pubblicata sul server, e la confronta con quella in esecuzione.
+// Se sono diverse: cancella ogni cache, disattiva il vecchio Service
+// Worker e si ricarica da sola — nessun intervento manuale, funziona
+// identico su telefono e PC. Se la rete non risponde entro 4s, salta
+// il controllo e apre l'app normalmente (mai bloccare l'uso offline).
+(function autoAggiornamento() {
+  if (sessionStorage.getItem('cam2_updateCheckDone')) return; // 1 volta per sessione, non ad ogni tab-switch
+  sessionStorage.setItem('cam2_updateCheckDone', '1');
+
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 4000);
+
+  fetch(location.pathname + '?_v=' + Date.now(), { cache: 'no-store', signal: ctrl.signal })
+    .then(function(res) { return res.text(); })
+    .then(function(html) {
+      clearTimeout(timeoutId);
+      const m = html.match(/const APP_VERSION = '([^']+)'/);
+      const versioneServer = m ? m[1] : null;
+      if (!versioneServer || versioneServer === APP_VERSION) return; // già aggiornato
+
+      console.log('[CAM-UPDATE] Versione in esecuzione: ' + APP_VERSION + ' — versione sul server: ' + versioneServer + ' — aggiornamento in corso…');
+
+      // Messaggio discreto per non far sembrare che l'app si sia bloccata
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif;gap:14px';
+      overlay.innerHTML = '<div style="width:36px;height:36px;border:4px solid #e0e0e0;border-top-color:#1a3080;border-radius:50%;animation:campwaupdrot .8s linear infinite"></div>' +
+        '<div style="font-weight:600;color:#333;font-size:14px">Aggiornamento in corso…</div>' +
+        '<style>@keyframes campwaupdrot{to{transform:rotate(360deg)}}</style>';
+      document.body.appendChild(overlay);
+
+      // Cancella tutte le cache e disattiva i Service Worker esistenti,
+      // poi ricarica forzando il bypass di qualsiasi cache residua
+      Promise.all([
+        ('caches' in window) ? caches.keys().then(function(keys){ return Promise.all(keys.map(function(k){ return caches.delete(k); })); }) : Promise.resolve(),
+        ('serviceWorker' in navigator) ? navigator.serviceWorker.getRegistrations().then(function(regs){ return Promise.all(regs.map(function(r){ return r.unregister(); })); }) : Promise.resolve()
+      ]).finally(function() {
+        sessionStorage.removeItem('cam2_updateCheckDone');
+        location.reload(true);
+      });
+    })
+    .catch(function() {
+      clearTimeout(timeoutId);
+      // Rete assente/lenta: nessun controllo possibile, l'app si apre
+      // normalmente con quello che ha già in cache (comportamento
+      // offline-first invariato)
+    });
+})();
+
+// ═══════════════════════════════════════════════════════════════
 //  STATO GLOBALE
 // ═══════════════════════════════════════════════════════════════
 const ST = {
