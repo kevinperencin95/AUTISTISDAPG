@@ -843,28 +843,38 @@ const APP_VERSION = 'v85';
       console.log('[CAM-UPDATE] Versione in esecuzione: ' + APP_VERSION + ' — versione sul server: ' + versioneServer + ' — aggiornamento in corso…');
 
       // Messaggio discreto per non far sembrare che l'app si sia bloccata
-      const overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif;gap:14px';
-      overlay.innerHTML = '<div style="width:36px;height:36px;border:4px solid #e0e0e0;border-top-color:#1a3080;border-radius:50%;animation:campwaupdrot .8s linear infinite"></div>' +
-        '<div style="font-weight:600;color:#333;font-size:14px">Aggiornamento in corso…</div>' +
-        '<style>@keyframes campwaupdrot{to{transform:rotate(360deg)}}</style>';
-      document.body.appendChild(overlay);
+      // — avvolto in try/catch: se per qualunque motivo fallisce (es. il
+      // <body> non esiste ancora), NON deve mai impedire la pulizia
+      // cache e il ricaricamento qui sotto, che sono la parte essenziale.
+      try {
+        if (document.body) {
+          const overlay = document.createElement('div');
+          overlay.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif;gap:14px';
+          overlay.innerHTML = '<div style="width:36px;height:36px;border:4px solid #e0e0e0;border-top-color:#1a3080;border-radius:50%;animation:campwaupdrot .8s linear infinite"></div>' +
+            '<div style="font-weight:600;color:#333;font-size:14px">Aggiornamento in corso…</div>' +
+            '<style>@keyframes campwaupdrot{to{transform:rotate(360deg)}}</style>';
+          document.body.appendChild(overlay);
+        }
+      } catch(_) {}
 
       // Cancella tutte le cache e disattiva i Service Worker esistenti,
-      // poi ricarica forzando il bypass di qualsiasi cache residua
+      // poi ricarica forzando il bypass di qualsiasi cache residua.
+      // Questa parte NON deve mai fallire silenziosamente: se anche la
+      // pulizia cache/SW desse errore, si ricarica comunque.
       Promise.all([
-        ('caches' in window) ? caches.keys().then(function(keys){ return Promise.all(keys.map(function(k){ return caches.delete(k); })); }) : Promise.resolve(),
-        ('serviceWorker' in navigator) ? navigator.serviceWorker.getRegistrations().then(function(regs){ return Promise.all(regs.map(function(r){ return r.unregister(); })); }) : Promise.resolve()
+        ('caches' in window) ? caches.keys().then(function(keys){ return Promise.all(keys.map(function(k){ return caches.delete(k); })); }).catch(function(){}) : Promise.resolve(),
+        ('serviceWorker' in navigator) ? navigator.serviceWorker.getRegistrations().then(function(regs){ return Promise.all(regs.map(function(r){ return r.unregister(); })); }).catch(function(){}) : Promise.resolve()
       ]).finally(function() {
         sessionStorage.removeItem('cam2_updateCheckDone');
         location.reload(true);
       });
     })
-    .catch(function() {
+    .catch(function(err) {
       clearTimeout(timeoutId);
       // Rete assente/lenta: nessun controllo possibile, l'app si apre
       // normalmente con quello che ha già in cache (comportamento
       // offline-first invariato)
+      console.log('[CAM-UPDATE] Controllo aggiornamento saltato: ' + (err && err.message || err));
     });
 })();
 
