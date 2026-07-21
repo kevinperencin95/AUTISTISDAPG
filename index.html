@@ -348,6 +348,10 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
 .info-row strong{text-align:right}
 .empty-state{text-align:center;padding:32px 16px;color:var(--testo-l);font-size:14px}
 .empty-state .ei{font-size:36px;margin-bottom:8px}
+.spinner-lg{
+  width:40px;height:40px;border:4px solid var(--grigio-m);
+  border-top-color:var(--blu);border-radius:50%;animation:rot .8s linear infinite;
+}
 
 @keyframes rot {to{transform:rotate(360deg)}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
@@ -430,8 +434,20 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
         ✅ Tutto registrato! <span id="qc-v">0</span> invii in attesa di rete — si sincronizzano da soli, puoi continuare a lavorare.
       </div>
 
+      <!-- STEP 0: VERIFICA TURNO IN CORSO (subito dopo il login, prima
+           di mostrare la selezione mezzo — evita di far scegliere una
+           targa mentre il sistema sta ancora controllando se esiste
+           già un turno aperto da riprendere) -->
+      <div id="step-verifica" class="card" style="display:none">
+        <div class="card-body" style="text-align:center;padding:40px 20px">
+          <div class="spinner-lg" style="margin:0 auto 16px"></div>
+          <div style="font-weight:600;font-size:15px;color:#333">Verifica turno in corso…</div>
+          <div style="font-size:13px;color:#888;margin-top:6px">Controllo se hai già un turno aperto da riprendere</div>
+        </div>
+      </div>
+
       <!-- STEP 1: INIZIO TURNO -->
-      <div id="step-inizio" class="card">
+      <div id="step-inizio" class="card" style="display:none">
         <div class="card-head blu">🟢 Inizio Turno — KM Partenza</div>
         <div class="card-body">
 
@@ -1163,6 +1179,12 @@ async function enterApp(autista, fresh) {
   document.getElementById('header-name').textContent      = autista.nomeCompleto;
   document.getElementById('header-matricola').textContent = 'Matr. ' + autista.matricola;
 
+  // Mostra SUBITO lo stato "verifica in corso": la selezione del mezzo
+  // resta nascosta finché non sappiamo con certezza se esiste già un
+  // turno aperto da riprendere — evita che l'autista scelga una targa
+  // per poi vedersi ribaltare la schermata su "Fine Turno" un istante dopo.
+  showStep('verifica');
+
   setDate('v-data'); setDate('c-data');
   updateNetUI();
 
@@ -1613,14 +1635,17 @@ async function checkTurnoAperto() {
       showStepFine(turnoServer);
       toast('🔄 Turno di oggi ripristinato', 'acc');
     } else {
-      // Nessun turno sul server: pulisci residui locali
+      // Nessun turno sul server: pulisci residui locali e mostra
+      // sempre la selezione mezzo (prima veniva mostrata solo se
+      // c'era un residuo locale da pulire — altrimenti la schermata
+      // di verifica restava bloccata all'infinito)
       const loc = getTurnoLocale();
       if (loc && loc.matricola === ST.autista.matricola) {
         clearTurnoLocale();
         window.__turnoAperto = null;
-        showStep('inizio');
       }
       document.getElementById('banner-turno-aperto').style.display = 'none';
+      showStep('inizio');
     }
   } catch(e) {
     // Offline: usa il locale SOLO se è di oggi
@@ -1632,9 +1657,15 @@ async function checkTurnoAperto() {
         showStepFine(loc);
       } else {
         clearTurnoLocale();
+        showStep('inizio');
       }
     } else {
+      // Rete irraggiungibile (online o offline senza turno locale
+      // valido): non lasciare l'autista bloccato sulla schermata di
+      // verifica — mostra comunque la selezione mezzo. Il doppio
+      // controllo al momento dell'invio resta la protezione reale.
       console.warn('checkTurnoAperto: server non raggiungibile', e);
+      showStep('inizio');
     }
   }
 }
@@ -1649,11 +1680,13 @@ function applicaTurnoAperto(turno) {
 function riprendiTurno() { const t=window.__turnoAperto; if(t) showStepFine(t); }
 
 function showStep(which) {
-  document.getElementById('step-inizio').style.display = which==='inizio' ? '' : 'none';
-  document.getElementById('step-fine').style.display   = which==='fine'   ? '' : 'none';
+  document.getElementById('step-verifica').style.display = which==='verifica' ? '' : 'none';
+  document.getElementById('step-inizio').style.display   = which==='inizio'   ? '' : 'none';
+  document.getElementById('step-fine').style.display     = which==='fine'    ? '' : 'none';
 }
 
 function showStepFine(turno) {
+  document.getElementById('step-verifica').style.display     = 'none';
   document.getElementById('step-inizio').style.display        = 'none';
   document.getElementById('banner-turno-aperto').style.display = 'none';
   document.getElementById('step-fine').style.display          = '';
