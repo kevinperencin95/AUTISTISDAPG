@@ -353,6 +353,22 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
   border-top-color:var(--blu);border-radius:50%;animation:rot .8s linear infinite;
 }
 
+/* ── Tira giù per aggiornare ────────────────────────────────────── */
+#pull-refresh-indicator{
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  height:0; overflow:hidden; opacity:0;
+  background:var(--grigio-bg); color:var(--testo-l); font-size:12.5px; font-weight:600;
+  transition:height .18s ease, opacity .18s ease;
+}
+#pull-refresh-indicator.dragging{ transition:none; }
+#pull-refresh-indicator.ready{ color:var(--blu-m); }
+#pull-refresh-indicator .pull-spinner{
+  width:16px; height:16px; border:2.5px solid var(--grigio-m);
+  border-top-color:var(--blu-m); border-radius:50%;
+  transform:rotate(0deg); transition:transform .1s linear;
+}
+#pull-refresh-indicator.refreshing .pull-spinner{ animation:rot .7s linear infinite; }
+
 @keyframes rot {to{transform:rotate(360deg)}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes pulse-warn{0%,100%{box-shadow:0 0 0 0 rgba(198,40,40,.5)}50%{box-shadow:0 0 0 8px rgba(198,40,40,0)}}
@@ -397,6 +413,12 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
   SCREEN: APP PRINCIPALE
 ══════════════════════════════════════════════════════════ -->
 <div class="screen" id="screen-app">
+
+  <!-- Indicatore "tira giù per aggiornare" -->
+  <div id="pull-refresh-indicator">
+    <div class="pull-spinner"></div>
+    <span id="pull-refresh-label">Tira giù per aggiornare</span>
+  </div>
 
   <!-- Header -->
   <div class="app-header">
@@ -810,7 +832,7 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
 // ═══════════════════════════════════════════════════════════════
 //  VERSIONE APP — bump ad ogni release
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION = 'v86';
+const APP_VERSION = 'v85';
 
 // ═══════════════════════════════════════════════════════════════
 //  AUTO-AGGIORNAMENTO SILENZIOSO — eseguito PRIMA di ogni altra cosa.
@@ -1516,6 +1538,16 @@ async function onTargaViaggio() {
   const targa = document.getElementById('v-targa').value;
   const box   = document.getElementById('storico-v');
   const banner = document.getElementById('targa-occupata-banner');
+
+  // ── Tieni allineato il modulo Carburante al mezzo scelto qui ──────
+  // Prima restava agganciato alla targa di default del login: se
+  // l'autista cambiava mezzo per il turno, il carburante veniva
+  // registrato sul mezzo sbagliato (quello vecchio), scollegato da
+  // quello realmente in uso.
+  const cDisp = document.getElementById('c-targa-display');
+  const cHid  = document.getElementById('c-targa');
+  if (cDisp) cDisp.textContent = targa || '—';
+  if (cHid)  cHid.value = targa || '';
 
   if (!targa) {
     box.classList.remove('visible');
@@ -2975,6 +3007,95 @@ function mostraBannerNotifica(tipo, msg) {
   clearTimeout(banner._timer);
   banner._timer = setTimeout(() => { banner.style.display = 'none'; }, 30000);
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  TIRA GIÙ PER AGGIORNARE — gesto manuale (nelle PWA "installate"
+//  il pull-to-refresh nativo del browser spesso non è disponibile).
+//  Attivo solo quando l'app è aperta e la pagina è già scrollata
+//  in cima, per non interferire con lo scroll normale del contenuto.
+// ═══════════════════════════════════════════════════════════════
+(function setupPullToRefresh() {
+  const indicator = document.getElementById('pull-refresh-indicator');
+  const label     = document.getElementById('pull-refresh-label');
+  if (!indicator || !label) return;
+
+  const SOGLIA   = 70;  // px di trascinamento per attivare l'aggiornamento
+  const MAX_PULL = 110; // altezza massima dell'indicatore
+  let startY = 0, pulling = false, currentPull = 0, refreshing = false;
+
+  function scrollPaginaAttiva() {
+    const p = document.querySelector('#screen-app .page.active');
+    return p ? p.scrollTop : 0;
+  }
+
+  function onStart(e) {
+    if (refreshing) return;
+    const app = document.getElementById('screen-app');
+    if (!app || !app.classList.contains('active')) return;
+    if (scrollPaginaAttiva() > 0) return; // non in cima: lascia scorrere normalmente
+    startY = e.touches[0].clientY;
+    pulling = true;
+    currentPull = 0;
+    indicator.classList.add('dragging');
+  }
+
+  function onMove(e) {
+    if (!pulling || refreshing) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy <= 0 || scrollPaginaAttiva() > 0) {
+      pulling = false;
+      indicator.classList.remove('dragging');
+      indicator.style.height = '0px';
+      indicator.style.opacity = '0';
+      return;
+    }
+    currentPull = Math.min(dy * 0.5, MAX_PULL); // resistenza al trascinamento
+    e.preventDefault();
+    indicator.style.height  = currentPull + 'px';
+    indicator.style.opacity = String(Math.min(currentPull / SOGLIA, 1));
+    const spin = indicator.querySelector('.pull-spinner');
+    if (spin) spin.style.transform = 'rotate(' + (currentPull * 3) + 'deg)';
+    if (currentPull >= SOGLIA) {
+      indicator.classList.add('ready');
+      label.textContent = 'Rilascia per aggiornare';
+    } else {
+      indicator.classList.remove('ready');
+      label.textContent = 'Tira giù per aggiornare';
+    }
+  }
+
+  async function onEnd() {
+    if (!pulling) return;
+    pulling = false;
+    indicator.classList.remove('dragging');
+
+    if (currentPull >= SOGLIA) {
+      refreshing = true;
+      indicator.classList.add('refreshing');
+      indicator.classList.remove('ready');
+      label.textContent = 'Aggiornamento…';
+      indicator.style.height  = '46px';
+      indicator.style.opacity = '1';
+      try {
+        await avvioAllineamento();
+        await Promise.all([caricaMezzi(), caricaTessereCarb()]);
+        toast('✅ Aggiornato', 'verde');
+      } catch(e) {
+        console.warn('[CAM-SYNC] pull-to-refresh:', e);
+      }
+      indicator.classList.remove('refreshing');
+    }
+    indicator.style.height  = '0px';
+    indicator.style.opacity = '0';
+    currentPull = 0;
+    refreshing = false;
+  }
+
+  document.addEventListener('touchstart', onStart, { passive:true });
+  document.addEventListener('touchmove',  onMove,  { passive:false });
+  document.addEventListener('touchend',   onEnd,   { passive:true });
+  document.addEventListener('touchcancel',onEnd,   { passive:true });
+})();
 </script>
 <script>
 if ('serviceWorker' in navigator) {
