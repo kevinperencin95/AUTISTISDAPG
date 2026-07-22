@@ -456,18 +456,6 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
         ✅ Tutto registrato! <span id="qc-v">0</span> invii in attesa di rete — si sincronizzano da soli, puoi continuare a lavorare.
       </div>
 
-      <!-- STEP 0: VERIFICA TURNO IN CORSO (subito dopo il login, prima
-           di mostrare la selezione mezzo — evita di far scegliere una
-           targa mentre il sistema sta ancora controllando se esiste
-           già un turno aperto da riprendere) -->
-      <div id="step-verifica" class="card" style="display:none">
-        <div class="card-body" style="text-align:center;padding:40px 20px">
-          <div class="spinner-lg" style="margin:0 auto 16px"></div>
-          <div style="font-weight:600;font-size:15px;color:#333">Verifica turno in corso…</div>
-          <div style="font-size:13px;color:#888;margin-top:6px">Controllo se hai già un turno aperto da riprendere</div>
-        </div>
-      </div>
-
       <!-- STEP 1: INIZIO TURNO -->
       <div id="step-inizio" class="card" style="display:none">
         <div class="card-head blu">🟢 Inizio Turno — KM Partenza</div>
@@ -735,6 +723,20 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
 </div><!-- /screen-app -->
 
 <!-- ══════════════════════════════════════════════════════════
+  POPUP VERIFICA TURNO — a schermo intero, blocca TUTTE le schede
+  (Viaggio/Carburante/I miei dati) finché il controllo non finisce.
+  Non è chiudibile dall'autista: si chiude da sola quando il
+  controllo termina (checkTurnoAperto).
+══════════════════════════════════════════════════════════ -->
+<div class="overlay" id="overlay-verifica-turno" style="z-index:900">
+  <div class="modal" style="text-align:center;padding:40px 24px">
+    <div class="spinner-lg" style="margin:0 auto 18px"></div>
+    <div style="font-weight:700;font-size:15px;color:var(--testo)">Verifica turno in corso…</div>
+    <div style="font-size:13px;color:var(--testo-l);margin-top:6px">Controllo se hai già un turno aperto da riprendere</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
   MODALE CONFERMA IDENTITÀ
 ══════════════════════════════════════════════════════════ -->
 <div class="overlay" id="overlay-confirm">
@@ -832,7 +834,7 @@ body{font-family:var(--font);background:var(--grigio-bg);color:var(--testo);disp
 // ═══════════════════════════════════════════════════════════════
 //  VERSIONE APP — bump ad ogni release
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION = 'v85';
+const APP_VERSION = 'v90';
 
 // ═══════════════════════════════════════════════════════════════
 //  AUTO-AGGIORNAMENTO SILENZIOSO — eseguito PRIMA di ogni altra cosa.
@@ -1276,11 +1278,13 @@ async function enterApp(autista, fresh) {
   document.getElementById('header-name').textContent      = autista.nomeCompleto;
   document.getElementById('header-matricola').textContent = 'Matr. ' + autista.matricola;
 
-  // Mostra SUBITO lo stato "verifica in corso": la selezione del mezzo
-  // resta nascosta finché non sappiamo con certezza se esiste già un
-  // turno aperto da riprendere — evita che l'autista scelga una targa
-  // per poi vedersi ribaltare la schermata su "Fine Turno" un istante dopo.
-  showStep('verifica');
+  // Mostra SUBITO il popup "verifica in corso": blocca l'INTERA app
+  // (tutte le schede — Viaggio, Carburante, I miei dati — e la barra di
+  // navigazione) finché non sappiamo con certezza se esiste già un turno
+  // aperto da riprendere. Prima l'indicatore viveva solo dentro la scheda
+  // Viaggio: l'autista poteva comunque toccare Carburante e inserire dati
+  // mentre il controllo era ancora in corso.
+  openOverlay('overlay-verifica-turno');
 
   setDate('v-data'); setDate('c-data');
   updateNetUI();
@@ -1779,13 +1783,16 @@ function applicaTurnoAperto(turno) {
 function riprendiTurno() { const t=window.__turnoAperto; if(t) showStepFine(t); }
 
 function showStep(which) {
-  document.getElementById('step-verifica').style.display = which==='verifica' ? '' : 'none';
+  // Qualsiasi passaggio esplicito a uno step chiude il popup di verifica:
+  // unico punto di controllo, così nessun punto di chiamata futuro può
+  // dimenticarsi di chiuderlo lasciando l'autista bloccato.
+  closeOverlay('overlay-verifica-turno');
   document.getElementById('step-inizio').style.display   = which==='inizio'   ? '' : 'none';
   document.getElementById('step-fine').style.display     = which==='fine'    ? '' : 'none';
 }
 
 function showStepFine(turno) {
-  document.getElementById('step-verifica').style.display     = 'none';
+  closeOverlay('overlay-verifica-turno');
   document.getElementById('step-inizio').style.display        = 'none';
   document.getElementById('banner-turno-aperto').style.display = 'none';
   document.getElementById('step-fine').style.display          = '';
