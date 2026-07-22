@@ -1797,6 +1797,16 @@ function showStepFine(turno) {
   document.getElementById('v-km-fin').value = '';
   document.getElementById('km-display').style.display = 'none';
   window.__turnoAperto = turno;
+
+  // ── Allinea SEMPRE il modulo Carburante al mezzo del turno aperto —
+  // copre il caso in cui il turno era GIÀ aperto quando l'autista entra
+  // (login, ripristino sessione, ritorno in foreground): in questi casi
+  // il menu del modulo KM non cambia mai (nessun evento onchange), quindi
+  // la sola sincronizzazione al cambio targa non bastava.
+  const cDisp = document.getElementById('c-targa-display');
+  const cHid  = document.getElementById('c-targa');
+  if (cDisp) cDisp.textContent = turno.targa || '—';
+  if (cHid)  cHid.value = turno.targa || '';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1888,19 +1898,28 @@ let _pendingViaggioPayload = null;
 
 async function inviaInizioTurno() {
   if (!ST.autista) return;
+
+  // ── Blocca SUBITO il pulsante e mostra lo spinner, prima di
+  // qualunque controllo — anche quelli di rete (checkTargaOccupata può
+  // richiedere fino a 4s). Prima lo spinner partiva solo alla fine di
+  // tutti i controlli: in quella finestra l'app sembrava bloccata e
+  // l'autista tendeva a toccare il pulsante più volte.
+  setBtnLoading('btn-ini','spin-ini','lbl-ini', true);
+
   const data  = dataOggiLocale(); // SEMPRE oggi al momento dell'invio
   setDate('v-data'); // riallinea anche il campo visibile
   const targa = document.getElementById('v-targa').value;
   const kmIni = document.getElementById('v-km-ini').value;
   const note  = document.getElementById('v-note-ini').value.trim();
 
-  if (!data)  { toast('⚠️ Inserisci la data', 'acc'); return; }
-  if (!targa) { toast('⚠️ Seleziona il mezzo', 'acc'); return; }
-  if (!kmIni || isNaN(parseFloat(kmIni))) { toast('⚠️ Inserisci i KM Inizio', 'acc'); return; }
+  if (!data)  { toast('⚠️ Inserisci la data', 'acc'); setBtnLoading('btn-ini','spin-ini','lbl-ini', false); return; }
+  if (!targa) { toast('⚠️ Seleziona il mezzo', 'acc'); setBtnLoading('btn-ini','spin-ini','lbl-ini', false); return; }
+  if (!kmIni || isNaN(parseFloat(kmIni))) { toast('⚠️ Inserisci i KM Inizio', 'acc'); setBtnLoading('btn-ini','spin-ini','lbl-ini', false); return; }
 
   // ── Blocco: targa già occupata da un collega (controllo client) ──
   if (_targaOccupataAttuale && _targaOccupataAttuale.occupata) {
     toast(`🚫 Mezzo già in uso da ${_targaOccupataAttuale.autista}!`, 'rosso');
+    setBtnLoading('btn-ini','spin-ini','lbl-ini', false);
     return;
   }
 
@@ -1909,6 +1928,7 @@ async function inviaInizioTurno() {
   await checkTargaOccupata(targa);
   if (_targaOccupataAttuale && _targaOccupataAttuale.occupata) {
     toast(`🚫 Mezzo appena occupato da ${_targaOccupataAttuale.autista}! Scegli un altro mezzo.`, 'rosso');
+    setBtnLoading('btn-ini','spin-ini','lbl-ini', false);
     return;
   }
 
@@ -1923,6 +1943,7 @@ async function inviaInizioTurno() {
       `KM Inizio (${ini}) inferiore all'ultimo valore (${kmMax.toLocaleString('it-IT')}).<br>Confermi?`;
     openOverlay('overlay-anomalia');
     window.__anomaliaType = 'inizio';
+    setBtnLoading('btn-ini','spin-ini','lbl-ini', false); // in attesa di conferma dall'autista
     return;
   }
   await _eseguiInizioTurno(payload);
@@ -2027,6 +2048,11 @@ async function refreshTurnoDalServer(turno) {
       const elTg = document.getElementById('fine-targa');
       if (elKm) elKm.textContent = aggiornato.kmInizio;
       if (elTg) elTg.textContent = aggiornato.targa;
+      // Allinea anche il modulo Carburante (stesso motivo di showStepFine)
+      const cDisp = document.getElementById('c-targa-display');
+      const cHid  = document.getElementById('c-targa');
+      if (cDisp) cDisp.textContent = aggiornato.targa || '—';
+      if (cHid)  cHid.value = aggiornato.targa || '';
       if (kmNuovi !== kmVecchi && kmVecchi > 0) {
         toast(`ℹ️ KM Inizio aggiornati dall'ufficio: ${kmNuovi.toLocaleString('it-IT')}`, 'acc');
       }
@@ -2041,6 +2067,11 @@ async function inviaFineTurno() {
   let turno = window.__turnoAperto;
   if (!turno)  { toast('⛔ Nessun turno aperto!', 'rosso'); return; }
 
+  // ── Blocca SUBITO il pulsante: il refresh pre-chiusura qui sotto può
+  // richiedere fino a 5s, e prima in quella finestra l'app sembrava
+  // bloccata senza nessun segnale, inducendo l'autista a toccare più volte.
+  setBtnLoading('btn-fin','spin-fin','lbl-fin', true);
+
   // ── REFRESH PRE-CHIUSURA: recupera eventuali correzioni dell'ufficio
   // (KM inizio/targa modificati sul foglio) prima di validare e inviare.
   // Max 5 secondi; se offline si prosegue coi valori locali (il server
@@ -2049,11 +2080,11 @@ async function inviaFineTurno() {
 
   const kmFin = document.getElementById('v-km-fin').value;
   const note  = document.getElementById('v-note-fin').value.trim();
-  if (!kmFin || isNaN(parseFloat(kmFin))) { toast('⚠️ Inserisci i KM Fine', 'acc'); return; }
+  if (!kmFin || isNaN(parseFloat(kmFin))) { toast('⚠️ Inserisci i KM Fine', 'acc'); setBtnLoading('btn-fin','spin-fin','lbl-fin', false); return; }
   const fin = parseFloat(kmFin);
   const ini = Number(turno.kmInizio);
   const km  = fin - ini;
-  if (fin < ini) { toast(`⛔ KM Fine (${fin}) < KM Inizio (${ini})!`, 'rosso'); return; }
+  if (fin < ini) { toast(`⛔ KM Fine (${fin}) < KM Inizio (${ini})!`, 'rosso'); setBtnLoading('btn-fin','spin-fin','lbl-fin', false); return; }
 
   const kmPercManuale = document.getElementById('v-km-perc-manuale')?.value;
   const payload = { action:'fine_turno', id:turno.id, kmFine:kmFin, note,
@@ -2066,6 +2097,7 @@ async function inviaFineTurno() {
       `KM percorsi elevati: <strong>${km} km</strong>.<br>Fine turno ${fin} corretto?`;
     openOverlay('overlay-anomalia');
     window.__anomaliaType = 'fine';
+    setBtnLoading('btn-fin','spin-fin','lbl-fin', false); // in attesa di conferma dall'autista
     return;
   }
   await _eseguiFineTurno(payload, km);
